@@ -1,0 +1,564 @@
+#!/usr/bin/env python3
+
+# gridded maps of ERA5 variable changes
+
+# JJA TCWV
+
+# 1980-2024
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+
+# Open and preprocess dataset
+ds = xr.open_dataset("tcwv_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+
+# subset into the season here
+subset = subset.sel(valid_time=subset['valid_time'].dt.month.isin([6,7,8]))
+
+# Group by year and calculate annual means
+years = subset.valid_time.dt.year
+annual_means = subset.groupby(years).mean(dim="valid_time")
+
+# Prepare trend arrays
+trend_array = np.full((annual_means.latitude.size, annual_means.longitude.size), np.nan)
+pval_array = np.full_like(trend_array, np.nan)
+
+# Calculate trends
+for i in tqdm(range(annual_means.latitude.size)):
+    for j in range(annual_means.longitude.size):
+        series = annual_means.tcwv[:, i, j].values
+        x_years = np.arange(1980, 2025)
+        slope, _, _, p_value, _ = linregress(x_years, series)
+        trend_array[i, j] = slope
+        pval_array[i, j] = p_value
+
+# Multiply trend by 45 years
+trend_array2 = trend_array * 10
+np.max(trend_array2)
+np.min(trend_array2)
+
+# Plotting
+fig = plt.figure(figsize=(8, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.STATES, linewidth=0.5)
+
+# Define bins and normalization
+bounds = np.arange(-2, 2.01, 0.2)
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=plt.cm.PRGn.N, clip=True)
+
+# Plot
+mesh = ax.pcolormesh(
+    annual_means.longitude, annual_means.latitude, trend_array2,
+    transform=ccrs.PlateCarree(), cmap="PRGn", norm=norm
+)
+
+# Colorbar
+cbar = plt.colorbar(mesh, ax=ax, orientation="horizontal", aspect=35, ticks=np.arange(-2, 2.01, 0.5))
+cbar.ax.tick_params(labelsize=20)
+#plt.title("Changes in JJA mean 2m dewpoint (1980–2024)", fontsize=14)
+
+# Significant trends
+sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-significant cells
+# ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
+#            color="k", s=0.2, transform=ccrs.PlateCarree())
+
+# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+
+# points you were plotting
+lon_pts = np.asarray(annual_means.longitude[sig_x])
+lat_pts = np.asarray(annual_means.latitude[sig_y])
+
+# infer grid origin and spacing from the full coord arrays
+lon_all = annual_means.longitude.values
+lat_all = annual_means.latitude.values
+dlon = float(np.median(np.diff(lon_all)))
+dlat = float(np.median(np.diff(lat_all)))
+lon0 = float(lon_all.min())
+lat0 = float(lat_all.min())
+
+# grid indices for each point
+i = np.rint((lon_pts - lon0) / dlon).astype(int)
+j = np.rint((lat_pts - lat0) / dlat).astype(int)
+
+# keep only every 3rd cell in both directions
+keep = (i % 3 == 0) & (j % 3 == 0)
+
+# plot (same as your call, just add [keep])
+ax.scatter(lon_pts[keep], lat_pts[keep],
+           color="k", s=1, transform=ccrs.PlateCarree())
+
+# 2000-2024
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+
+# Open and preprocess dataset
+ds = xr.open_dataset("tcwv_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+subset = subset.sel(valid_time=ds.valid_time.dt.year >= 2000)
+
+# subset into the season here
+subset = subset.sel(valid_time=subset['valid_time'].dt.month.isin([6,7,8]))
+
+# Group by year and calculate annual means
+years = subset.valid_time.dt.year
+annual_means = subset.groupby(years).mean(dim="valid_time")
+
+# Prepare trend arrays
+trend_array = np.full((annual_means.latitude.size, annual_means.longitude.size), np.nan)
+pval_array = np.full_like(trend_array, np.nan)
+
+# Calculate trends
+for i in tqdm(range(annual_means.latitude.size)):
+    for j in range(annual_means.longitude.size):
+        series = annual_means.tcwv[:, i, j].values
+        x_years = np.arange(2000, 2025)
+        slope, _, _, p_value, _ = linregress(x_years, series)
+        trend_array[i, j] = slope
+        pval_array[i, j] = p_value
+
+# Multiply trend by 45 years
+trend_array2 = trend_array * 10
+np.max(trend_array2)
+np.min(trend_array2)
+
+# Plotting
+fig = plt.figure(figsize=(8, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.STATES, linewidth=0.5)
+
+# Define bins and normalization
+bounds = np.arange(-2, 2.01, 0.2)
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=plt.cm.PRGn.N, clip=True)
+
+# Plot
+mesh = ax.pcolormesh(
+    annual_means.longitude, annual_means.latitude, trend_array2,
+    transform=ccrs.PlateCarree(), cmap="PRGn", norm=norm
+)
+
+# Colorbar
+cbar = plt.colorbar(mesh, ax=ax, orientation="horizontal", aspect=35, ticks=np.arange(-2, 2.01, 0.5))
+cbar.ax.tick_params(labelsize=20)
+#plt.title("Changes in JJA mean 2m dewpoint (1980–2024)", fontsize=14)
+
+# Significant trends
+sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-significant cells
+# ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
+#            color="k", s=0.2, transform=ccrs.PlateCarree())
+
+# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+
+# points you were plotting
+lon_pts = np.asarray(annual_means.longitude[sig_x])
+lat_pts = np.asarray(annual_means.latitude[sig_y])
+
+# infer grid origin and spacing from the full coord arrays
+lon_all = annual_means.longitude.values
+lat_all = annual_means.latitude.values
+dlon = float(np.median(np.diff(lon_all)))
+dlat = float(np.median(np.diff(lat_all)))
+lon0 = float(lon_all.min())
+lat0 = float(lat_all.min())
+
+# grid indices for each point
+i = np.rint((lon_pts - lon0) / dlon).astype(int)
+j = np.rint((lat_pts - lat0) / dlat).astype(int)
+
+# keep only every 3rd cell in both directions
+keep = (i % 3 == 0) & (j % 3 == 0)
+
+# plot (same as your call, just add [keep])
+ax.scatter(lon_pts[keep], lat_pts[keep],
+           color="k", s=1, transform=ccrs.PlateCarree())
+
+# JJA 2m dewpoint
+
+# 1980-2024
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+
+# Open and preprocess dataset
+ds = xr.open_dataset("dew2m_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+
+# subset into the season here
+subset = subset.sel(valid_time=subset['valid_time'].dt.month.isin([6,7,8]))
+
+# Group by year and calculate annual means
+years = subset.valid_time.dt.year
+annual_means = subset.groupby(years).mean(dim="valid_time")
+
+# Prepare trend arrays
+trend_array = np.full((annual_means.latitude.size, annual_means.longitude.size), np.nan)
+pval_array = np.full_like(trend_array, np.nan)
+
+# Calculate trends
+for i in tqdm(range(annual_means.latitude.size)):
+    for j in range(annual_means.longitude.size):
+        series = annual_means.d2m[:, i, j].values
+        x_years = np.arange(1980, 2025)
+        slope, _, _, p_value, _ = linregress(x_years, series)
+        trend_array[i, j] = slope
+        pval_array[i, j] = p_value
+
+# Multiply trend by 45 years
+trend_array2 = trend_array * 10
+np.max(trend_array2)
+np.min(trend_array2)
+
+# Plotting
+fig = plt.figure(figsize=(8, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.STATES, linewidth=0.5)
+
+# Define bins and normalization
+bounds = np.arange(-1.6, 1.61, 0.2)
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=plt.cm.PRGn.N, clip=True)
+
+# Plot
+mesh = ax.pcolormesh(
+    annual_means.longitude, annual_means.latitude, trend_array2,
+    transform=ccrs.PlateCarree(), cmap="PRGn", norm=norm
+)
+
+# Colorbar
+cbar = plt.colorbar(mesh, ax=ax, orientation="horizontal", aspect=35, ticks=np.arange(-1.6, 1.61, 0.8))
+cbar.ax.tick_params(labelsize=20)
+#plt.title("Changes in JJA mean 2m dewpoint (1980–2024)", fontsize=14)
+
+# Significant trends
+sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-significant cells
+# ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
+#            color="k", s=0.2, transform=ccrs.PlateCarree())
+
+# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+
+# points you were plotting
+lon_pts = np.asarray(annual_means.longitude[sig_x])
+lat_pts = np.asarray(annual_means.latitude[sig_y])
+
+# infer grid origin and spacing from the full coord arrays
+lon_all = annual_means.longitude.values
+lat_all = annual_means.latitude.values
+dlon = float(np.median(np.diff(lon_all)))
+dlat = float(np.median(np.diff(lat_all)))
+lon0 = float(lon_all.min())
+lat0 = float(lat_all.min())
+
+# grid indices for each point
+i = np.rint((lon_pts - lon0) / dlon).astype(int)
+j = np.rint((lat_pts - lat0) / dlat).astype(int)
+
+# keep only every 3rd cell in both directions
+keep = (i % 3 == 0) & (j % 3 == 0)
+
+# plot (same as your call, just add [keep])
+ax.scatter(lon_pts[keep], lat_pts[keep],
+           color="k", s=1, transform=ccrs.PlateCarree())
+
+# 2000-2024
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+
+# Open and preprocess dataset
+ds = xr.open_dataset("dew2m_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+subset = subset.sel(valid_time=ds.valid_time.dt.year >= 2000)
+
+# subset into the season here
+subset = subset.sel(valid_time=subset['valid_time'].dt.month.isin([6,7,8]))
+
+# Group by year and calculate annual means
+years = subset.valid_time.dt.year
+annual_means = subset.groupby(years).mean(dim="valid_time")
+
+# Prepare trend arrays
+trend_array = np.full((annual_means.latitude.size, annual_means.longitude.size), np.nan)
+pval_array = np.full_like(trend_array, np.nan)
+
+# Calculate trends
+for i in tqdm(range(annual_means.latitude.size)):
+    for j in range(annual_means.longitude.size):
+        series = annual_means.d2m[:, i, j].values
+        x_years = np.arange(2000, 2025)
+        slope, _, _, p_value, _ = linregress(x_years, series)
+        trend_array[i, j] = slope
+        pval_array[i, j] = p_value
+
+# Multiply trend by 45 years
+trend_array2 = trend_array * 10
+np.max(trend_array2)
+np.min(trend_array2)
+
+# Plotting
+fig = plt.figure(figsize=(8, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.STATES, linewidth=0.5)
+
+# Define bins and normalization
+bounds = np.arange(-1.6, 1.61, 0.2)
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=plt.cm.PRGn.N, clip=True)
+
+# Plot
+mesh = ax.pcolormesh(
+    annual_means.longitude, annual_means.latitude, trend_array2,
+    transform=ccrs.PlateCarree(), cmap="PRGn", norm=norm
+)
+
+# Colorbar
+cbar = plt.colorbar(mesh, ax=ax, orientation="horizontal", aspect=35, ticks=np.arange(-1.6, 1.61, 0.8))
+cbar.ax.tick_params(labelsize=20)
+#plt.title("Changes in JJA mean 2m dewpoint (1980–2024)", fontsize=14)
+
+# Significant trends
+sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-significant cells
+# ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
+#            color="k", s=0.2, transform=ccrs.PlateCarree())
+
+# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+
+# points you were plotting
+lon_pts = np.asarray(annual_means.longitude[sig_x])
+lat_pts = np.asarray(annual_means.latitude[sig_y])
+
+# infer grid origin and spacing from the full coord arrays
+lon_all = annual_means.longitude.values
+lat_all = annual_means.latitude.values
+dlon = float(np.median(np.diff(lon_all)))
+dlat = float(np.median(np.diff(lat_all)))
+lon0 = float(lon_all.min())
+lat0 = float(lat_all.min())
+
+# grid indices for each point
+i = np.rint((lon_pts - lon0) / dlon).astype(int)
+j = np.rint((lat_pts - lat0) / dlat).astype(int)
+
+# keep only every 3rd cell in both directions
+keep = (i % 3 == 0) & (j % 3 == 0)
+
+# plot (same as your call, just add [keep])
+ax.scatter(lon_pts[keep], lat_pts[keep],
+           color="k", s=1, transform=ccrs.PlateCarree())
+
+# JJA CAPE
+
+# 1980-2024
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+
+# Open and preprocess dataset
+ds = xr.open_dataset("cape_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+
+# subset into the season here
+subset = subset.sel(valid_time=subset['valid_time'].dt.month.isin([6,7,8]))
+
+# Group by year and calculate annual means
+years = subset.valid_time.dt.year
+annual_means = subset.groupby(years).mean(dim="valid_time")
+
+# Prepare trend arrays
+trend_array = np.full((annual_means.latitude.size, annual_means.longitude.size), np.nan)
+pval_array = np.full_like(trend_array, np.nan)
+
+# Calculate trends
+for i in tqdm(range(annual_means.latitude.size)):
+    for j in range(annual_means.longitude.size):
+        series = annual_means.cape[:, i, j].values
+        x_years = np.arange(1980, 2025)
+        slope, _, _, p_value, _ = linregress(x_years, series)
+        trend_array[i, j] = slope
+        pval_array[i, j] = p_value
+
+# Multiply trend by 45 years
+trend_array2 = trend_array * 10
+np.max(trend_array2)
+np.min(trend_array2)
+
+# Plotting
+fig = plt.figure(figsize=(8, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.STATES, linewidth=0.5)
+
+# Define bins and normalization
+bounds = np.arange(-100, 100.1, 10)
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=plt.cm.PRGn.N, clip=True)
+
+# Plot
+mesh = ax.pcolormesh(
+    annual_means.longitude, annual_means.latitude, trend_array2,
+    transform=ccrs.PlateCarree(), cmap="PRGn", norm=norm
+)
+
+# Colorbar
+cbar = plt.colorbar(mesh, ax=ax, orientation="horizontal", aspect=35, ticks=np.arange(-100, 100.1, 50))
+cbar.ax.tick_params(labelsize=20)
+#plt.title("Changes in JJA mean 2m dewpoint (1980–2024)", fontsize=14)
+
+# Significant trends
+sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-significant cells
+# ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
+#            color="k", s=0.2, transform=ccrs.PlateCarree())
+
+# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+
+# points you were plotting
+lon_pts = np.asarray(annual_means.longitude[sig_x])
+lat_pts = np.asarray(annual_means.latitude[sig_y])
+
+# infer grid origin and spacing from the full coord arrays
+lon_all = annual_means.longitude.values
+lat_all = annual_means.latitude.values
+dlon = float(np.median(np.diff(lon_all)))
+dlat = float(np.median(np.diff(lat_all)))
+lon0 = float(lon_all.min())
+lat0 = float(lat_all.min())
+
+# grid indices for each point
+i = np.rint((lon_pts - lon0) / dlon).astype(int)
+j = np.rint((lat_pts - lat0) / dlat).astype(int)
+
+# keep only every 3rd cell in both directions
+keep = (i % 3 == 0) & (j % 3 == 0)
+
+# plot (same as your call, just add [keep])
+ax.scatter(lon_pts[keep], lat_pts[keep],
+           color="k", s=1, transform=ccrs.PlateCarree())
+
+# 2000-2024
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+
+# Open and preprocess dataset
+ds = xr.open_dataset("cape_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+subset = subset.sel(valid_time=ds.valid_time.dt.year >= 2000)
+
+# subset into the season here
+subset = subset.sel(valid_time=subset['valid_time'].dt.month.isin([6,7,8]))
+
+# Group by year and calculate annual means
+years = subset.valid_time.dt.year
+annual_means = subset.groupby(years).mean(dim="valid_time")
+
+# Prepare trend arrays
+trend_array = np.full((annual_means.latitude.size, annual_means.longitude.size), np.nan)
+pval_array = np.full_like(trend_array, np.nan)
+
+# Calculate trends
+for i in tqdm(range(annual_means.latitude.size)):
+    for j in range(annual_means.longitude.size):
+        series = annual_means.cape[:, i, j].values
+        x_years = np.arange(2000, 2025)
+        slope, _, _, p_value, _ = linregress(x_years, series)
+        trend_array[i, j] = slope
+        pval_array[i, j] = p_value
+
+# Multiply trend by 45 years
+trend_array2 = trend_array * 10
+np.max(trend_array2)
+np.min(trend_array2)
+
+# Plotting
+fig = plt.figure(figsize=(8, 8))
+ax = plt.axes(projection=ccrs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+ax.add_feature(cfeature.STATES, linewidth=0.5)
+
+# Define bins and normalization
+bounds = np.arange(-100, 100.1, 10)
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=plt.cm.PRGn.N, clip=True)
+
+# Plot
+mesh = ax.pcolormesh(
+    annual_means.longitude, annual_means.latitude, trend_array2,
+    transform=ccrs.PlateCarree(), cmap="PRGn", norm=norm
+)
+
+# Colorbar
+cbar = plt.colorbar(mesh, ax=ax, orientation="horizontal", aspect=35, ticks=np.arange(-100, 100.1, 50))
+cbar.ax.tick_params(labelsize=20)
+#plt.title("Changes in JJA mean 2m dewpoint (1980–2024)", fontsize=14)
+
+# Significant trends
+sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-significant cells
+# ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
+#            color="k", s=0.2, transform=ccrs.PlateCarree())
+
+# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+
+# points you were plotting
+lon_pts = np.asarray(annual_means.longitude[sig_x])
+lat_pts = np.asarray(annual_means.latitude[sig_y])
+
+# infer grid origin and spacing from the full coord arrays
+lon_all = annual_means.longitude.values
+lat_all = annual_means.latitude.values
+dlon = float(np.median(np.diff(lon_all)))
+dlat = float(np.median(np.diff(lat_all)))
+lon0 = float(lon_all.min())
+lat0 = float(lat_all.min())
+
+# grid indices for each point
+i = np.rint((lon_pts - lon0) / dlon).astype(int)
+j = np.rint((lat_pts - lat0) / dlat).astype(int)
+
+# keep only every 3rd cell in both directions
+keep = (i % 3 == 0) & (j % 3 == 0)
+
+# plot (same as your call, just add [keep])
+ax.scatter(lon_pts[keep], lat_pts[keep],
+           color="k", s=1, transform=ccrs.PlateCarree())
