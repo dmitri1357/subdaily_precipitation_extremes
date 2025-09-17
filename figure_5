@@ -71,7 +71,7 @@ sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-s
 # ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
 #            color="k", s=0.2, transform=ccrs.PlateCarree())
 
-# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+# code for plotting significance stippling in every 3rd grid cell in lat/lon direction
 
 # points you were plotting
 lon_pts = np.asarray(annual_means.longitude[sig_x])
@@ -164,7 +164,7 @@ sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-s
 # ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
 #            color="k", s=0.2, transform=ccrs.PlateCarree())
 
-# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+# code for plotting significance stippling in every 3rd grid cell in lat/lon direction
 
 # points you were plotting
 lon_pts = np.asarray(annual_means.longitude[sig_x])
@@ -258,7 +258,7 @@ sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-s
 # ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
 #            color="k", s=0.2, transform=ccrs.PlateCarree())
 
-# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+# code for plotting significance stippling in every 3rd grid cell in lat/lon direction
 
 # points you were plotting
 lon_pts = np.asarray(annual_means.longitude[sig_x])
@@ -351,7 +351,7 @@ sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-s
 # ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
 #            color="k", s=0.2, transform=ccrs.PlateCarree())
 
-# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+# code for plotting significance stippling in every 3rd grid cell in lat/lon direction
 
 # points you were plotting
 lon_pts = np.asarray(annual_means.longitude[sig_x])
@@ -445,7 +445,7 @@ sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-s
 # ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
 #            color="k", s=0.2, transform=ccrs.PlateCarree())
 
-# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+# code for plotting significance stippling in every 3rd grid cell in lat/lon direction
 
 # points you were plotting
 lon_pts = np.asarray(annual_means.longitude[sig_x])
@@ -538,7 +538,7 @@ sig_y, sig_x = np.where(pval_array >= 0.10) # flipped to show stippling in non-s
 # ax.scatter(annual_means.longitude[sig_x], annual_means.latitude[sig_y],
 #            color="k", s=0.2, transform=ccrs.PlateCarree())
 
-# code from chatGPT for plotting significance stippling in every 3rd grid cell in lat/lon direction
+# code for plotting significance stippling in every 3rd grid cell in lat/lon direction
 
 # points you were plotting
 lon_pts = np.asarray(annual_means.longitude[sig_x])
