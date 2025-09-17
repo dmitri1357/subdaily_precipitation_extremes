@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+
+# panel A
+
+import glob
+import pandas as pd
+
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly_annual/*.csv") # now using cleaned_hourly for original timestamps
+
+years_list = []
+
+# Loop through each file and extract the highest precipitation record
+for file_path in tqdm(csv_files):
+    # Read the CSV file
+    df = pd.read_csv(file_path)
+
+    # Drop rows where precip is NaN (if applicable)
+    df = df.dropna(subset=["precip"])
+
+    # Find the year with the highest precipitation value
+    max_rows = df[df["precip"] == df["precip"].max()] # subset all possible tied values
+    #max_row = max_rows.iloc[-1,:] # changed to extract the last occurrence in case of ties
+    
+    # collect all ties
+    years_list.extend(list(max_rows.year)) 
+
+    # Print results
+    #print(f"Station: {max_row['NAME']}, Date: {max_row['DATE']}, Max Precip: {max_row['precip']:.2f}")
+    
+# plot bar chart of the number of stations breaking/tying 1-hr record each year
+
+avail_stations = np.load('avail_stations_annual.npy')
+
+# Convert to DataFrame for counting occurrences
+year_counts = pd.Series(years_list).value_counts().sort_index()
+np.sum(year_counts) # 52 = good, there is one value per station
+
+# Ensure all years from 1980 to 2024 are present in the count (fill missing years with 0)
+all_years = pd.Series(range(1980, 2025))
+year_counts = year_counts.reindex(all_years, fill_value=0)
+
+from scipy.stats import linregress
+
+perc_stations = (year_counts.values/avail_stations)*100
+
+# Linear trend for all years
+slope_all, intercept_all, _, p_all, _ = linregress(year_counts.index, perc_stations)
+
+# Linear trend for 2000–2024
+mask = year_counts.index >= 2000
+slope_recent, intercept_recent, _, p_recent, _ = linregress(year_counts.index[mask], perc_stations[mask])
+
+# Plot
+plt.figure(figsize=(10, 8))
+bars = plt.bar(year_counts.index, perc_stations, color="dodgerblue")
+
+# for bar in bars:
+#     height = bar.get_height()
+#     if height > 0:
+#         plt.text(bar.get_x() + bar.get_width()/2, height + 0.1, str(int(height)),
+#                  ha='center', fontsize=18, fontweight='bold')
+
+# Add trend lines
+years = np.array(year_counts.index)
+plt.plot(years, intercept_all + slope_all * years, linestyle='--', color='tab:orange', lw=2)
+plt.plot(years[mask], intercept_recent + slope_recent * years[mask], linestyle='--', color='red', lw=2)
+
+# Ticks and labels
+plt.yticks(np.arange(0, 10.1, 1), fontsize=20)
+plt.ylim(top=10.5)
+plt.xticks([1980,1985,1990,1995,2000,2005,2010,2015,2020,2024], fontsize=20)
+#plt.ylabel("Number of events", size=28)
+plt.title("Percent of stations with record 1-hr precip events", size=28)
+
+# Trend stats
+plt.text(1978, 9.5, f"1980-2024 trend = {slope_all:.2f}, p = {p_all:.3f}", fontsize=22, color="tab:orange")
+plt.text(1978, 9, f"2000-2024 trend = {slope_recent:.2f}, p = {p_recent:.3f}", fontsize=22, color="red")
+
+plt.tight_layout()
+plt.show()
+
+# panel B
+
+# map the year of record 1-hr precip at each station
+
+import glob
+import pandas as pd
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import numpy as np
+from shapely.geometry import Point
+import matplotlib.colors as mcolors
+
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly_annual/*.csv") 
+
+# Store results
+results = []
+results_all = [] # useful to quickly see how many events there are
+
+# Loop through each file and extract the highest precipitation record
+# this takes 45 seconds
+for file_path in tqdm(csv_files):
+    df = pd.read_csv(file_path)
+
+    # Drop rows where precip is NaN
+    df = df.dropna(subset=["precip"])
+
+    max_rows = df[df["precip"] == df["precip"].max()] # subset all possible tied values
+    
+    # took out the max of 3 ties requirement
+    #if max_rows.shape[0] <= 3: # only consider stations with maximum of 3 ties
+    max_row = max_rows.iloc[-1,:] # changed to extract the last occurrence 
+    
+    # Extract relevant information
+    max_year = pd.to_datetime(max_row["DATE"]).year
+    results.append({
+        "NAME": max_row["NAME"],
+        "DATE": max_row["DATE"],
+        "precip": max_row["precip"],
+        "year": max_year,
+        "LATITUDE": max_row["LATITUDE"],
+        "LONGITUDE": max_row["LONGITUDE"]
+    })
+    
+    for x in range(max_rows.shape[0]):
+        this_row = max_rows.iloc[x,:]
+        results_all.append({
+            "NAME": max_row["NAME"],
+            "DATE": this_row["DATE"],
+            "precip": this_row["precip"],
+            "year": max_year,
+            "LATITUDE": max_row["LATITUDE"],
+            "LONGITUDE": max_row["LONGITUDE"]
+        })
+
+# Convert results to a DataFrame
+results_df = pd.DataFrame(results)
+results_df_all = pd.DataFrame(results_all)
+
+# Convert to GeoDataFrame for mapping
+geometry = [Point(xy) for xy in zip(results_df["LONGITUDE"], results_df["LATITUDE"])]
+gdf = gpd.GeoDataFrame(results_df, geometry=geometry, crs="EPSG:4326")
+
+# Import US states shapefile and subset to western US
+states = gpd.read_file('cb_2018_us_state_5m.shp')
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin(['Washington','Oregon','Idaho','Montana',
+                                  'California','Nevada','Utah','Wyoming',
+                                  'Colorado','Arizona','New Mexico'])]
+
+# ---- PLOT THE MAP ----
+fig, ax = plt.subplots(figsize=(10, 8))
+
+# Define colormap and normalization
+years = np.arange(1980, 2026)  # 1980-2024 (45 bins) + an extra upper boundary
+cmap = plt.cm.YlOrRd  # Use the rainbow colormap
+
+# Use BoundaryNorm with 45 exact bins
+norm = mcolors.BoundaryNorm(boundaries=years, ncolors=cmap.N, extend="neither")
+
+# Plot the stations, colored by max precip year
+sc = gdf.plot(ax=ax, column="year", cmap=cmap, norm=norm, markersize=100, edgecolor="black", alpha=1,  legend=False)
+
+# # Annotate each point with its year
+# for x, y, label in zip(gdf.geometry.x, gdf.geometry.y, gdf['year']):
+#     ax.annotate(label, xy=(x, y), xytext=(3, 3), textcoords="offset points", fontsize=8)
+
+# Plot state boundaries
+states.boundary.plot(ax=ax, edgecolor='k', lw=1)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", aspect=45, 
+                    fraction=0.025, pad=0.002, shrink=0.6)
+cbar.ax.tick_params(labelsize=10)
+
+# Define only the years to be labeled
+tick_labels_years = [1980, 1985, 1990, 1995, 2000, 2005, 2010, 2015, 2020, 2024]
+
+# Get the correct tick positions (center of bins)
+tick_positions_labeled = [year + 0.5 for year in tick_labels_years]
+
+# **Force the colorbar to use only the selected ticks**
+cbar.set_ticks(tick_positions_labeled)  # Set only the desired ticks
+cbar.set_ticklabels([str(year) for year in tick_labels_years])  # Set only the corresponding labels
+
+# **Completely disable minor ticks** (to prevent extra ticks from appearing)
+cbar.ax.xaxis.set_minor_locator(plt.NullLocator())  
+
+# Remove map frame (lat/lon markings)
+ax.set_axis_off()
+
+# Finalize map
+plt.title("Year of record 1-hr precip", fontsize=21, y=0.96)
+
+num_stations_2000_2024 = results_df[results_df.year >= 2000]
+len(num_stations_2000_2024) / len(results_df)
+
+# how many stations in the Four Corners experienced max 1-hr precip in 2015-2024?
+
+import geopandas as gpd
+
+# Define the target states
+target_states = ["Utah", "Colorado", "Arizona", "New Mexico"]
+
+# Subset the states shapefile to only include the four target states
+target_states_gdf = states[states["NAME"].isin(target_states)]
+
+# Ensure the station geodataframe (gdf) and states geodataframe have the same CRS
+gdf = gdf.to_crs(target_states_gdf.crs)
+
+# Perform a spatial join to assign each station to a state
+stations_with_state = gpd.sjoin(gdf, target_states_gdf, how="inner", predicate="within")
+
+# Filter for stations that recorded max 1-hour precip between 2015-2024
+stations_2015_2024 = stations_with_state[(stations_with_state["year"] >= 2015) & 
+                                         (stations_with_state["year"] <= 2024)]
+
+# Count the number of such stations
+num_stations = len(stations_2015_2024)
