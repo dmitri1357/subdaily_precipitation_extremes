@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+
+import glob
+import pandas as pd
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import numpy as np
+from shapely.geometry import Point
+from tqdm import tqdm
+
+import matplotlib as mpl
+mpl.rc('font',family='Arial')
+
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly/*.csv")
+
+# define season mapping
+def get_season(month):
+    if month in [12, 1, 2]:
+        return "DJF"
+    elif month in [3, 4, 5]:
+        return "MAM"
+    elif month in [6, 7, 8]:
+        return "JJA"
+    else:
+        return "SON"
+
+season_results = []
+
+for file_path in tqdm(csv_files):
+    df = pd.read_csv(file_path)
+    df["DATE"] = pd.to_datetime(df["DATE"])
+    df["year"] = df["DATE"].dt.year
+    df["month"] = df["DATE"].dt.month
+    df["season"] = df["month"].apply(get_season)
+
+    seasonal_counts = {"DJF": 0, "MAM": 0, "JJA": 0, "SON": 0}
+    for year in df["year"].unique():
+        year_df = df[df["year"] == year]
+        max_row = year_df.loc[year_df["precip"].idxmax()]
+        seasonal_counts[max_row["season"]] += 1
+
+    dominant_season = max(seasonal_counts, key=seasonal_counts.get)
+    
+    season_results.append({
+        "NAME": df["NAME"].iloc[0],
+        "LATITUDE": df["LATITUDE"].iloc[0],
+        "LONGITUDE": df["LONGITUDE"].iloc[0],
+        "season": dominant_season
+    })
+    
+# convert to gdf
+results_df = pd.DataFrame(season_results)
+geometry = [Point(xy) for xy in zip(results_df["LONGITUDE"], results_df["LATITUDE"])]
+gdf = gpd.GeoDataFrame(results_df, geometry=geometry, crs="EPSG:4326")
+
+# import US states shapefile and subset to WUS
+states = gpd.read_file('cb_2018_us_state_5m.shp')
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    'Washington','Oregon','Idaho','Montana','California','Nevada',
+    'Utah','Wyoming','Colorado','Arizona','New Mexico'])]
+
+# percentages for legend
+num_djf = (len(gdf[gdf["season"] == "DJF"])/140) * 100
+num_mam = (len(gdf[gdf["season"] == "MAM"])/140) * 100
+num_jja = (len(gdf[gdf["season"] == "JJA"])/140) * 100
+num_son = (len(gdf[gdf["season"] == "SON"])/140) * 100
+season_numbers = [num_djf,num_mam,num_jja,num_son]
+
+# plotting
+
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor='k')
+
+season_colors = {"DJF": "blue", "MAM": "c", "JJA": "red", "SON": "orange"}
+
+# Plot season-specific points
+for i, (season, color) in enumerate(season_colors.items()):
+    subset = gdf[gdf["season"] == season]
+    if not subset.empty:
+        subset.plot(ax=ax, color=color, markersize=100, edgecolor="black", label=f'{season} ({season_numbers[i]:.1f}%)')
+# # Annotate each point with its station name
+# for x, y, label in zip(gdf.geometry.x, gdf.geometry.y, gdf['NAME']):
+#     ax.annotate(label, xy=(x, y), xytext=(3, 3), textcoords="offset points", fontsize=8)
+
+# create a custom legend 
+handles, labels = ax.get_legend_handles_labels()
+if handles:
+    plt.legend(handles, labels, loc="lower left", bbox_to_anchor=(-0.05, 0.08), fontsize=10)
+
+ax.set_title("Most common season of 1-hr AMP", fontsize=20, y=0.96)
+ax.set_axis_off()
