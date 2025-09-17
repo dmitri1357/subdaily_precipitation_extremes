@@ -153,45 +153,6 @@ plt.show()
 stations.results.median()
 np.median(perc_changes)
 
-# detour
-
-# check the % of stations with increases in CA
-
-states_list = ['California']
-states_sub = states[states['NAME'].isin(states_list)][['NAME', 'geometry']]
-
-# align CRS
-stations = stations.to_crs(states_sub.crs)
-
-# stations inside selected states
-stn = stations.sjoin(states_sub, how='inner', predicate='within')
-
-# percent with JJA peak
-total = len(stn)
-season = (stn['results'] > 0).sum()
-pct = 100.0 * season / total 
-
-print(f"{pct:.1f}% ({season}/{total}) of stations in {states_list} have JJA peak.")
-
-# median intensity change in CA
-
-states_list = ['California']
-states_sub = states[states['NAME'].isin(states_list)][['NAME', 'geometry']]
-
-# add station-level percentage changes to stations gdf
-stations['perc_changes'] = perc_changes
-
-# align CRS
-stations = stations.to_crs(states_sub.crs)
-
-# stations inside selected states
-stn = stations.sjoin(states_sub, how='inner', predicate='within')
-
-# percent with JJA peak
-stn['perc_changes'].median()
-
-# back to original workflow
-
 resampled_perc_changes = np.load('perc_resample_annual_1hr_1980.npy')
 resampled_medians = np.median(resampled_perc_changes,axis=1)
 from scipy import stats
@@ -370,45 +331,6 @@ plt.show()
 # get WUS median
 stations.results.median()
 np.median(perc_changes)
-
-# detour
-
-# check the % of stations with increases in CA
-
-states_list = ['California']
-states_sub = states[states['NAME'].isin(states_list)][['NAME', 'geometry']]
-
-# align CRS
-stations = stations.to_crs(states_sub.crs)
-
-# stations inside selected states
-stn = stations.sjoin(states_sub, how='inner', predicate='within')
-
-# percent with JJA peak
-total = len(stn)
-season = (stn['results'] > 0).sum()
-pct = 100.0 * season / total 
-
-print(f"{pct:.1f}% ({season}/{total}) of stations in {states_list} have JJA peak.")
-
-# median intensity change in CA
-
-states_list = ['California']
-states_sub = states[states['NAME'].isin(states_list)][['NAME', 'geometry']]
-
-# add station-level percentage changes to stations gdf
-stations['perc_changes'] = perc_changes
-
-# align CRS
-stations = stations.to_crs(states_sub.crs)
-
-# stations inside selected states
-stn = stations.sjoin(states_sub, how='inner', predicate='within')
-
-# percent with JJA peak
-stn['perc_changes'].median()
-
-# back to original workflow
 
 resampled_perc_changes = np.load('perc_resample_annual_1hr_2000.npy')
 resampled_medians = np.median(resampled_perc_changes,axis=1)
