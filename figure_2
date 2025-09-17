@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
 '''
-Note - this code is for panel A only. Panel B was created the same way, but with data subset to 2000-2024.
-Panel C & D were created by aggregating information from the subdaily aggregations, including from panel A. 
+Note - this code is for panels A and B only. Panels C & D were created by aggregating information from the subdaily aggregations, including from panel A. 
 '''
 
 # trends in annual maximum 1-hour precip using linear regression
+
+# panel A
 
 # 1980-2024
 
@@ -146,4 +147,402 @@ cbar.ax.tick_params(labelsize=10)
 plt.title("Annual 1-hr AMP trends (1980–2024)", fontsize=20, y=0.96)
 #plt.title("Annual", fontsize=36, y=0.96)
 ax.set_axis_off()
+plt.show()
+
+# get WUS medians
+stations.results.median()
+np.median(perc_changes)
+
+# detour
+
+# check the % of stations with increases in CA
+
+states_list = ['California']
+states_sub = states[states['NAME'].isin(states_list)][['NAME', 'geometry']]
+
+# align CRS
+stations = stations.to_crs(states_sub.crs)
+
+# stations inside selected states
+stn = stations.sjoin(states_sub, how='inner', predicate='within')
+
+# percent with JJA peak
+total = len(stn)
+season = (stn['results'] > 0).sum()
+pct = 100.0 * season / total 
+
+print(f"{pct:.1f}% ({season}/{total}) of stations in {states_list} have JJA peak.")
+
+# median intensity change in CA
+
+states_list = ['California']
+states_sub = states[states['NAME'].isin(states_list)][['NAME', 'geometry']]
+
+# add station-level percentage changes to stations gdf
+stations['perc_changes'] = perc_changes
+
+# align CRS
+stations = stations.to_crs(states_sub.crs)
+
+# stations inside selected states
+stn = stations.sjoin(states_sub, how='inner', predicate='within')
+
+# percent with JJA peak
+stn['perc_changes'].median()
+
+# back to original workflow
+
+resampled_perc_changes = np.load('perc_resample_annual_1hr_1980.npy')
+resampled_medians = np.median(resampled_perc_changes,axis=1)
+from scipy import stats
+stats.percentileofscore(resampled_medians,np.median(perc_changes))
+
+# 50% resampling as in Barbero 2017
+
+import pandas as pd
+import numpy as np
+
+increase_percents = []
+decrease_percents = []
+
+for i in tqdm(range(100)):
+    sample = results_df.sample(frac=0.5, random_state=i) # changing the random state changes the sampling
+    total = len(sample)
+    inc = (sample['trend_type'] == 'significant_increase').sum()
+    dec = (sample['trend_type'] == 'significant_decrease').sum()
+    
+    increase_percents.append((inc / total) * 100)
+    decrease_percents.append((dec / total) * 100)
+
+increase_percents_1980 = np.array(increase_percents)
+decrease_percents_1980 = np.array(decrease_percents)
+
+# testing for field significance using resampling (100 iterations)
+
+# resampling loop is in field_significance.py file
+
+# this information will be used further below
+len(gdf[gdf["trend_type"] == "significant_increase"]) # 7 stations have significant increases
+len(gdf[gdf["trend_type"] == "significant_decrease"]) # 6 stations have significant decreases
+
+# panel B
+
+# 2000-2024
+
+import glob
+import pandas as pd
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import numpy as np
+from shapely.geometry import Point
+from scipy.stats import linregress
+
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly_annual/*.csv") 
+
+results = []
+
+perc_changes = []
+
+# Loop through each file and compute the trend
+# this takes 1 minute
+for file_path in tqdm(csv_files):
+    df = pd.read_csv(file_path)
+    # dropping missing years as in Barbero 2017
+    df = df.dropna(subset=["precip"])  # Remove NaNs
+    
+    df["year"] = pd.to_datetime(df["DATE"]).dt.year
+    df = df[df.year >= 2000] # toggle this on and off to switch between 1980 and 2000 start years
+    grouped = df.groupby("year")["precip"].max().reset_index()
+    grouped = grouped[grouped["precip"] > 0] # only keep years where max precip >0, essentially treat zero-max years as NA
+    
+    num_year_vec = np.arange(len(grouped))
+    slope, intercept, r_value, p_value, std_err = linregress(num_year_vec, grouped["precip"])
+        
+    if p_value < 0.1: # changed to p < 0.05
+        trend_type = "significant_increase" if slope > 0 else "significant_decrease"
+    else:
+        if slope > 0:
+            trend_type = "insignificant_increase"
+        elif slope < 0:
+            trend_type = "insignificant_decrease"
+        else:
+            trend_type = "no_trend"
+    
+    results.append({
+        "NAME": df["NAME"].iloc[0],
+        "LATITUDE": df["LATITUDE"].iloc[0],
+        "LONGITUDE": df["LONGITUDE"].iloc[0],
+        "slope": slope,
+        "p_value": p_value,
+        "trend_type": trend_type,
+        "perc_change": (slope * 2.54) * 10 # convert to mm
+    })
+    
+    # adding this code to get domain-median percentage change
+    total_change = slope * len(grouped)
+    starting_val = intercept
+    percentage_change = (total_change/starting_val) * 100
+    perc_changes.append(percentage_change)
+
+# Create a DataFrame and GeoDataFrame
+results_df = pd.DataFrame(results)
+geometry = [Point(xy) for xy in zip(results_df["LONGITUDE"], results_df["LATITUDE"])]
+gdf = gpd.GeoDataFrame(results_df, geometry=geometry, crs="EPSG:4326")
+
+# Load and subset the US states shapefile
+states = gpd.read_file('cb_2018_us_state_5m.shp')
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    'Washington','Oregon','Idaho','Montana','California','Nevada',
+    'Utah','Wyoming','Colorado','Arizona','New Mexico'])]
+
+# Calculate percentages
+total_stations = len(gdf)
+pct_sig_inc = ((len(gdf[gdf["trend_type"] == "significant_increase"])) / total_stations) * 100
+pct_sig_dec = ((len(gdf[gdf["trend_type"] == "significant_decrease"])) / total_stations) * 100
+pct_insig_inc = ((len(gdf[gdf["trend_type"] == "insignificant_increase"])) / total_stations) * 100
+pct_insig_dec = ((len(gdf[gdf["trend_type"] == "insignificant_decrease"])) / total_stations) * 100
+
+stations = gpd.read_file("all_stations_annual.shp")
+
+# Add to DataFrame
+stations["results"] = results_df.perc_change
+stations["size"] = np.where(results_df["p_value"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+import matplotlib as mpl
+from matplotlib.colors import ListedColormap, BoundaryNorm
+
+# Define bin edges centered at 0
+bins = np.array([
+    -1, -0.75, -0.5, -0.4, -0.3, -0.2, -0.15, -0.1, -0.05,
+     0,
+     0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1
+])
+
+# Brown shades (negative side, dark to light)
+brown_colors = [
+    "#4d2600", "#804000", "#a65c00", "#bf6f00", "#d98200",
+    "#f0a500", "#f8b500", "#fcd299", "#feebd2"
+]
+
+# Green shades (positive side, light to dark)
+green_colors = [
+    "#e5f5e0", "#c7e9c0", "#a1d99b", "#74c476", "#41ab5d",
+    "#238b45", "#006d2c", "#00441b", "#002b13"
+]
+
+# Combine brown and green colors
+custom_colors = brown_colors + green_colors
+
+# Create colormap and normalizer
+custom_cmap = ListedColormap(custom_colors)
+norm = BoundaryNorm(bins, custom_cmap.N)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+
+stations.plot(ax=ax, column="results", cmap=custom_cmap, norm=norm, 
+              markersize=stations['size'], edgecolor="black")
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=custom_cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", aspect=35, 
+                    fraction=0.025, pad=0.002, shrink=0.6,
+                    ticks=[-1, -0.5, -0.3, -0.15, 0, 0.15, 0.3, 0.5, 1])  # Fewer, spaced-out ticks
+# Set custom tick labels
+cbar.set_ticklabels(["-1", "-0.5", "-0.3", "-0.15", "0", "0.15", "0.3", "0.5", "1"])
+cbar.ax.tick_params(labelsize=15)
+
+plt.title("Annual 1-hr AMP trends (2000–2024)", fontsize=20, y=0.96)
+ax.set_axis_off()
+plt.show()
+
+# get WUS median
+stations.results.median()
+np.median(perc_changes)
+
+# detour
+
+# check the % of stations with increases in CA
+
+states_list = ['California']
+states_sub = states[states['NAME'].isin(states_list)][['NAME', 'geometry']]
+
+# align CRS
+stations = stations.to_crs(states_sub.crs)
+
+# stations inside selected states
+stn = stations.sjoin(states_sub, how='inner', predicate='within')
+
+# percent with JJA peak
+total = len(stn)
+season = (stn['results'] > 0).sum()
+pct = 100.0 * season / total 
+
+print(f"{pct:.1f}% ({season}/{total}) of stations in {states_list} have JJA peak.")
+
+# median intensity change in CA
+
+states_list = ['California']
+states_sub = states[states['NAME'].isin(states_list)][['NAME', 'geometry']]
+
+# add station-level percentage changes to stations gdf
+stations['perc_changes'] = perc_changes
+
+# align CRS
+stations = stations.to_crs(states_sub.crs)
+
+# stations inside selected states
+stn = stations.sjoin(states_sub, how='inner', predicate='within')
+
+# percent with JJA peak
+stn['perc_changes'].median()
+
+# back to original workflow
+
+resampled_perc_changes = np.load('perc_resample_annual_1hr_2000.npy')
+resampled_medians = np.median(resampled_perc_changes,axis=1)
+from scipy import stats
+stats.percentileofscore(resampled_medians,np.median(perc_changes))
+
+# 50% resampling as in Barbero 2017
+
+import pandas as pd
+import numpy as np
+
+increase_percents = []
+decrease_percents = []
+
+for i in tqdm(range(100)):
+    sample = results_df.sample(frac=0.5, random_state=i) # changing the random state changes the sampling
+    total = len(sample)
+    inc = (sample['trend_type'] == 'significant_increase').sum()
+    dec = (sample['trend_type'] == 'significant_decrease').sum()
+    
+    increase_percents.append((inc / total) * 100)
+    decrease_percents.append((dec / total) * 100)
+
+increase_percents_2000 = np.array(increase_percents)
+decrease_percents_2000 = np.array(decrease_percents)
+
+# testing for field significance using resampling (100 iterations)
+
+# resampling loop is in field_significance.py file, also done on kamiak
+
+# this information will be used further below
+len(gdf[gdf["trend_type"] == "significant_increase"]) # 11 stations have significant increases
+len(gdf[gdf["trend_type"] == "significant_decrease"]) # 2 stations have significant decreases
+
+resamples_1980 = np.load('field_sig_resample_annual_1hr_1980.npy')
+
+num_stations = 139
+
+# visualize the distributions of the resamples and the actual values
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Initialize arrays to hold counts
+significant_increases_1980 = []
+significant_decreases_1980 = []
+
+# Loop through each resample
+for i in range(resamples_1980.shape[0]):
+    slopes = resamples_1980[i, 0, :]
+    pvals = resamples_1980[i, 1, :]
+    
+    count_increase = np.sum((slopes > 0) & (pvals < 0.1))
+    count_decrease = np.sum((slopes < 0) & (pvals < 0.1))
+    
+    significant_increases_1980.append(count_increase)
+    significant_decreases_1980.append(count_decrease)
+
+significant_increases_1980 = np.array(significant_increases_1980)
+significant_decreases_1980 = np.array(significant_decreases_1980)
+
+sig_incr_perc_1980 = (significant_increases_1980/num_stations)*100
+sig_decr_perc_1980 = (significant_decreases_1980/num_stations)*100
+
+# plot histograms
+
+# Sig+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+plt.figure(figsize=(7, 3))
+bins = np.arange(-0.5, 19.6, 1)
+
+plt.hist(sig_incr_perc_1980, bins=bins, histtype='step', density=True,
+          edgecolor='black', linewidth=1.5, label='Randomized')
+
+plt.hist(increase_percents_1980, bins=bins, histtype='step', density=True,
+          edgecolor='tab:orange', linewidth=1.5, label='1980-2024')
+
+plt.hist(increase_percents_2000, bins=bins, histtype='step', density=True,
+          edgecolor='red', linewidth=1.5, label='2000-2024')
+
+# # Add vertical lines
+plt.axvline(np.median(sig_incr_perc_1980), color='k', linestyle='-.', linewidth=3) 
+plt.axvline(np.median(increase_percents_1980), color='orange', linestyle='--', linewidth=3) 
+plt.axvline(np.median(increase_percents_2000), color='red', linestyle='--', linewidth=3) 
+
+plt.xlim(-1, 9)
+plt.ylim(0, 0.5)
+plt.yticks(np.arange(0, 0.51, 0.1), fontsize=18)
+plt.xticks(np.arange(0, 18.1, 2), fontsize=18)
+
+#plt.xlabel('% of cells w/sig. trends', fontsize=18)
+plt.ylabel('PDF', fontsize=18)
+plt.legend(fontsize=14, framealpha=1) # framealpha makes legend background opaque
+plt.title('Sig+ resamples', size=22)
+plt.tight_layout()
+plt.show()
+
+from scipy.stats import mannwhitneyu
+mannwhitneyu(increase_percents_1980,sig_incr_perc_1980)
+mannwhitneyu(increase_percents_2000,sig_incr_perc_1980)
+
+# Sig-
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+plt.figure(figsize=(7, 3))
+bins = np.arange(-0.5, 19.6, 1)
+
+plt.hist(sig_decr_perc_1980, bins=bins, histtype='step', density=True,
+          edgecolor='black', linewidth=1.5, label='Randomized')
+
+plt.hist(decrease_percents_1980, bins=bins, histtype='step', density=True,
+          edgecolor='tab:orange', linewidth=1.5, label='1980-2024')
+
+plt.hist(decrease_percents_2000, bins=bins, histtype='step', density=True,
+          edgecolor='red', linewidth=1.5, label='2000-2024')
+
+# # Add vertical lines
+plt.axvline(np.median(sig_decr_perc_1980), color='k', linestyle='-.', linewidth=3) 
+plt.axvline(np.median(decrease_percents_1980), color='orange', linestyle='--', linewidth=3) 
+plt.axvline(np.median(decrease_percents_2000), color='red', linestyle='--', linewidth=3) 
+
+plt.xlim(-1, 9)
+plt.ylim(0, 0.6)
+plt.yticks(np.arange(0, 0.61, 0.1), fontsize=18)
+plt.xticks(np.arange(0, 18.1, 2), fontsize=18)
+
+#plt.xlabel('% of cells w/sig. trends', fontsize=18)
+plt.ylabel('PDF', fontsize=18)
+#plt.legend(fontsize=14, framealpha=1) # framealpha makes legend background opaque
+plt.title('Sig- resamples', size=22)
+plt.tight_layout()
 plt.show()
