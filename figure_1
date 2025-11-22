@@ -95,59 +95,113 @@ ax.set_axis_off()
 
 # panel B
 
-csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly/*.csv") 
+# time of day for peak annual 1-hour precipitation
 
-results = []
+import glob
+import pandas as pd
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import numpy as np
+from shapely.geometry import Point
+from tqdm import tqdm
 
-# loop through each file and compute the trend
-# this takes 1 minute
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly/*.csv")
+
+# Define hour bin mapping
+def get_hour_bin(hour):
+    if 0 <= hour <= 5:
+        return "00:00-05:00"
+    elif 6 <= hour <= 11:
+        return "06:00-11:00"
+    elif 12 <= hour <= 17:
+        return "12:00-17:00"
+    elif 18 <= hour <= 23:
+        return "18:00-23:00"
+
+# Store results
+time_results = []
+
 for file_path in tqdm(csv_files):
     df = pd.read_csv(file_path)
-    df = df.dropna(subset=["precip"])  # remove NaNs
+    df["DATE"] = pd.to_datetime(df["DATE"])
+    df["year"] = df["DATE"].dt.year
+    df["hour"] = df["DATE"].dt.hour
+    df["hour_bin"] = df["hour"].apply(get_hour_bin)
+
+    hourly_counts = {"00:00-05:00": 0, "06:00-11:00": 0, "12:00-17:00": 0, "18:00-23:00": 0}
+    for year in df["year"].unique():
+        year_df = df[df["year"] == year]
+        if year_df.precip.max() > 0: # filter our if year/season max is zero
+            max_row = year_df.loc[year_df["precip"].idxmax()]
+            hourly_counts[max_row["hour_bin"]] += 1
+
+    total_years = sum(hourly_counts.values())
+    dominant_bin = max(hourly_counts, key=hourly_counts.get)
+    dominant_count = hourly_counts[dominant_bin]
     
-    df["year"] = pd.to_datetime(df["DATE"]).dt.year
-    grouped = df.groupby("year")["precip"].max().reset_index()
-    grouped = grouped[grouped["precip"] > 0] # only keep years where max precip >0, essentially treat zero-max years as NA
-    
-    results.append(np.median(grouped.precip))
+    assigned_bin = dominant_bin
+    # if dominant_count / total_years >= 0.5:
+    #     assigned_bin = dominant_bin
+    # else:
+    #     assigned_bin = "Other"  # Mark gray for ambiguous dominant bins
 
-results = np.array(results)
-results = (results * 2.54) * 10 # convert inches to mm
+    time_results.append({
+        "NAME": df["NAME"].iloc[0],
+        "LATITUDE": df["LATITUDE"].iloc[0],
+        "LONGITUDE": df["LONGITUDE"].iloc[0],
+        "time_bin": assigned_bin
+    })
 
-stations = gpd.read_file("all_stations.shp")
+# Convert to GeoDataFrame
+results_df = pd.DataFrame(time_results)
+geometry = [Point(xy) for xy in zip(results_df["LONGITUDE"], results_df["LATITUDE"])]
+gdf = gpd.GeoDataFrame(results_df, geometry=geometry, crs="EPSG:4326")
 
-# Add to DataFrame
-stations["results"] = results
-
-# Load states
-states = gpd.read_file("cb_2018_us_state_5m.shp")
+# Import US states shapefile and subset to western US
+states = gpd.read_file('cb_2018_us_state_5m.shp')
 states = states.to_crs("EPSG:4326")
 states = states[states.NAME.isin([
-    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
-    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
-])]
+    'Washington','Oregon','Idaho','Montana','California','Nevada',
+    'Utah','Wyoming','Colorado','Arizona','New Mexico'])]
 
-import matplotlib.colors as mcolors
+# Define color map
+time_colors = {
+    "00:00-05:00": "k",
+    "06:00-11:00": "#D2B48C",
+    "12:00-17:00": "tab:purple",
+    "18:00-23:00": "cornflowerblue",
+    "Other": "gray"
+}
 
-# Define bins and colormap
-bounds = np.arange(0, 30.01, 2.5)
-cmap = plt.cm.Greens
-norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+num_1 = (len(gdf[gdf["time_bin"] == "00:00-05:00"])/140) * 100
+num_2 = (len(gdf[gdf["time_bin"] == "06:00-11:00"])/140) * 100
+num_3 = (len(gdf[gdf["time_bin"] == "12:00-17:00"])/140) * 100
+num_4 = (len(gdf[gdf["time_bin"] == "18:00-23:00"])/140) * 100
+time_numbers = [num_1,num_2,num_3,num_4]
 
-# Plotting
+# Plot
 fig, ax = plt.subplots(figsize=(10, 8))
-states.boundary.plot(ax=ax, edgecolor="k")
-stations.plot(ax=ax, column="results", cmap=cmap, norm=norm, 
-              markersize=100, edgecolor="black")
+states.boundary.plot(ax=ax, edgecolor='k')
 
-# Add colorbar
-sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", aspect=35, fraction=0.025, pad=0.002, shrink=0.6,
-                    ticks=np.arange(0, 30.01, 5))
-cbar.ax.tick_params(labelsize=15)
-# Annotate each point with its station name
-# for x, y, label in zip(gdf.geometry.x, gdf.geometry.y, gdf['station']):
-#     ax.annotate(label, xy=(x, y), xytext=(3, 3), textcoords="offset points", fontsize=8)
+# Plot season-specific points
+for i, (time_bin, color) in enumerate(time_colors.items()):
+    subset = gdf[gdf["time_bin"] == time_bin]
+    if not subset.empty:
+        subset.plot(ax=ax, color=color, markersize=100, edgecolor="black", label=f'{time_bin} ({time_numbers[i]:.1f}%)')
+
+# # Plot 'Other' stations separately (gray color, no label in legend)
+# gdf[gdf["time_bin"] == "Other"].plot(ax=ax, color="gray", markersize=100)
+
+# Add legend (only for the bins that actually have data)
+handles, labels = ax.get_legend_handles_labels()
+if handles:
+    plt.legend(handles, labels, loc="lower left", bbox_to_anchor=(-0.1, 0.08), fontsize=10)
+
+#ax.set_title("Most common time of day for annual max 1-hr precipitation", fontsize=16, y=0.97)
+ax.set_axis_off()
+plt.show()
+
     
 
 plt.title("Median 1-hr AMP amounts", fontsize=20, y=0.96)
