@@ -56,8 +56,6 @@ subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from
 season4 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
 season4 = np.squeeze(season4.cape.values) # change var name here
 
-import statsmodels.api as sm
-from statsmodels.stats.outliers_influence import variance_inflation_factor
 import seaborn as sns
 from scipy.stats import pearsonr  
 
