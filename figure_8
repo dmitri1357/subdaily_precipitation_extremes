@@ -130,56 +130,6 @@ for file_path in tqdm(csv_files):
     
     # take inverse of omega700 so that positive values = ascending
     variable_df["omega"] = variable_df['omega'] * -1
-    
-    # # standardize predictors so coefficients are comparable
-    # Xz = variable_df[['omega', 'tcwv', 'dew', 'logcape']]
-    # #Xz = (X - X.mean()) / X.std(ddof=0)   # standard z-scores per column
-    # Xz = sm.add_constant(Xz)              # add intercept
-    
-    # y = variable_df['logprec'].to_numpy()
-    
-    # #Xz = sm.add_constant(Xz)   
-    # # ---------- 2) Fit OLS ----------
-    # model = sm.OLS(y, Xz).fit()
-    # print(model.summary())
-    
-    # # Extract coefficients & p-values 
-    # coef_table = pd.DataFrame({
-    #     "coef": model.params,
-    #     "pval": model.pvalues
-    # })
-    
-    # # ---------- 3) Multicollinearity ----------
-    # # VIF (on predictors only; exclude constant)
-    # X_for_vif = Xz.drop(columns="const")
-    # vif = pd.Series(
-    #     [variance_inflation_factor(X_for_vif.values, i) for i in range(X_for_vif.shape[1])],
-    #     index=X_for_vif.columns, name="VIF"
-    # )
-    # print("\nVariance Inflation Factors (VIF):")
-    # print(vif)
-    
-    # # Condition number of the design matrix (rule-of-thumb: > 30 suggests problems)
-    # cond_number = np.linalg.cond(Xz.values)
-    # print(f"\nCondition number (X): {cond_number:.2f}")
-    
-    # # Correlation matrix (helps identify groups)
-    # print("\nPredictor correlation matrix:")
-    # print(Xz.corr())
-    
-    # # correlation matrix
-    # corr = Xz.corr()
-    
-    # plt.figure(figsize=(6,5))
-    # sns.heatmap(
-    #     corr,
-    #     annot=True,         # show correlation values in cells
-    #     fmt=".2f",
-    #     cmap="RdBu_r",      # red–blue reversed colormap
-    #     vmin=-1, vmax=1,    # full correlation range
-    #     square=True,
-    #     cbar_kws={"shrink": 0.8}
-    # )
         
     omega_r, omega_p = pearsonr(variable_df.logprec,variable_df.omega)
     tcwv_r, tcwv_p = pearsonr(variable_df.logprec,variable_df.tcwv)
@@ -429,8 +379,6 @@ subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from
 season4 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
 season4 = np.squeeze(season4.cape.values) # change var name here
 
-import statsmodels.api as sm
-from statsmodels.stats.outliers_influence import variance_inflation_factor
 import seaborn as sns
 from scipy.stats import pearsonr  
 
@@ -505,56 +453,6 @@ for file_path in tqdm(csv_files):
     
     # take inverse of omega700 so that positive values = ascending
     variable_df["omega"] = variable_df['omega'] * -1
-    
-    # # standardize predictors so coefficients are comparable
-    # Xz = variable_df[['omega', 'tcwv', 'dew', 'logcape']]
-    # #Xz = (X - X.mean()) / X.std(ddof=0)   # standard z-scores per column
-    # Xz = sm.add_constant(Xz)              # add intercept
-    
-    # y = variable_df['logprec'].to_numpy()
-    
-    # #Xz = sm.add_constant(Xz)   
-    # # ---------- 2) Fit OLS ----------
-    # model = sm.OLS(y, Xz).fit()
-    # print(model.summary())
-    
-    # # Extract coefficients & p-values 
-    # coef_table = pd.DataFrame({
-    #     "coef": model.params,
-    #     "pval": model.pvalues
-    # })
-    
-    # # ---------- 3) Multicollinearity ----------
-    # # VIF (on predictors only; exclude constant)
-    # X_for_vif = Xz.drop(columns="const")
-    # vif = pd.Series(
-    #     [variance_inflation_factor(X_for_vif.values, i) for i in range(X_for_vif.shape[1])],
-    #     index=X_for_vif.columns, name="VIF"
-    # )
-    # print("\nVariance Inflation Factors (VIF):")
-    # print(vif)
-    
-    # # Condition number of the design matrix (rule-of-thumb: > 30 suggests problems)
-    # cond_number = np.linalg.cond(Xz.values)
-    # print(f"\nCondition number (X): {cond_number:.2f}")
-    
-    # # Correlation matrix (helps identify groups)
-    # print("\nPredictor correlation matrix:")
-    # print(Xz.corr())
-    
-    # # correlation matrix
-    # corr = Xz.corr()
-    
-    # plt.figure(figsize=(6,5))
-    # sns.heatmap(
-    #     corr,
-    #     annot=True,         # show correlation values in cells
-    #     fmt=".2f",
-    #     cmap="RdBu_r",      # red–blue reversed colormap
-    #     vmin=-1, vmax=1,    # full correlation range
-    #     square=True,
-    #     cbar_kws={"shrink": 0.8}
-    # )
         
     omega_r, omega_p = pearsonr(variable_df.logprec,variable_df.omega)
     tcwv_r, tcwv_p = pearsonr(variable_df.logprec,variable_df.tcwv)
@@ -804,8 +702,6 @@ subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from
 season4 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
 season4 = np.squeeze(season4.cape.values) # change var name here
 
-import statsmodels.api as sm
-from statsmodels.stats.outliers_influence import variance_inflation_factor
 import seaborn as sns
 from scipy.stats import pearsonr  
 
@@ -880,56 +776,6 @@ for file_path in tqdm(csv_files):
     
     # take inverse of omega700 so that positive values = ascending
     variable_df["omega"] = variable_df['omega'] * -1
-    
-    # # standardize predictors so coefficients are comparable
-    # Xz = variable_df[['omega', 'tcwv', 'dew', 'logcape']]
-    # #Xz = (X - X.mean()) / X.std(ddof=0)   # standard z-scores per column
-    # Xz = sm.add_constant(Xz)              # add intercept
-    
-    # y = variable_df['logprec'].to_numpy()
-    
-    # #Xz = sm.add_constant(Xz)   
-    # # ---------- 2) Fit OLS ----------
-    # model = sm.OLS(y, Xz).fit()
-    # print(model.summary())
-    
-    # # Extract coefficients & p-values 
-    # coef_table = pd.DataFrame({
-    #     "coef": model.params,
-    #     "pval": model.pvalues
-    # })
-    
-    # # ---------- 3) Multicollinearity ----------
-    # # VIF (on predictors only; exclude constant)
-    # X_for_vif = Xz.drop(columns="const")
-    # vif = pd.Series(
-    #     [variance_inflation_factor(X_for_vif.values, i) for i in range(X_for_vif.shape[1])],
-    #     index=X_for_vif.columns, name="VIF"
-    # )
-    # print("\nVariance Inflation Factors (VIF):")
-    # print(vif)
-    
-    # # Condition number of the design matrix (rule-of-thumb: > 30 suggests problems)
-    # cond_number = np.linalg.cond(Xz.values)
-    # print(f"\nCondition number (X): {cond_number:.2f}")
-    
-    # # Correlation matrix (helps identify groups)
-    # print("\nPredictor correlation matrix:")
-    # print(Xz.corr())
-    
-    # # correlation matrix
-    # corr = Xz.corr()
-    
-    # plt.figure(figsize=(6,5))
-    # sns.heatmap(
-    #     corr,
-    #     annot=True,         # show correlation values in cells
-    #     fmt=".2f",
-    #     cmap="RdBu_r",      # red–blue reversed colormap
-    #     vmin=-1, vmax=1,    # full correlation range
-    #     square=True,
-    #     cbar_kws={"shrink": 0.8}
-    # )
         
     omega_r, omega_p = pearsonr(variable_df.logprec,variable_df.omega)
     tcwv_r, tcwv_p = pearsonr(variable_df.logprec,variable_df.tcwv)
@@ -1179,8 +1025,6 @@ subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from
 season4 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
 season4 = np.squeeze(season4.cape.values) # change var name here
 
-import statsmodels.api as sm
-from statsmodels.stats.outliers_influence import variance_inflation_factor
 import seaborn as sns
 from scipy.stats import pearsonr  
 
@@ -1256,56 +1100,6 @@ for file_path in tqdm(csv_files):
     # take inverse of omega700 so that positive values = ascending
     variable_df["omega"] = variable_df['omega'] * -1
     
-    # # standardize predictors so coefficients are comparable
-    # Xz = variable_df[['omega', 'tcwv', 'dew', 'logcape']]
-    # #Xz = (X - X.mean()) / X.std(ddof=0)   # standard z-scores per column
-    # Xz = sm.add_constant(Xz)              # add intercept
-    
-    # y = variable_df['logprec'].to_numpy()
-    
-    # #Xz = sm.add_constant(Xz)   
-    # # ---------- 2) Fit OLS ----------
-    # model = sm.OLS(y, Xz).fit()
-    # print(model.summary())
-    
-    # # Extract coefficients & p-values 
-    # coef_table = pd.DataFrame({
-    #     "coef": model.params,
-    #     "pval": model.pvalues
-    # })
-    
-    # # ---------- 3) Multicollinearity ----------
-    # # VIF (on predictors only; exclude constant)
-    # X_for_vif = Xz.drop(columns="const")
-    # vif = pd.Series(
-    #     [variance_inflation_factor(X_for_vif.values, i) for i in range(X_for_vif.shape[1])],
-    #     index=X_for_vif.columns, name="VIF"
-    # )
-    # print("\nVariance Inflation Factors (VIF):")
-    # print(vif)
-    
-    # # Condition number of the design matrix (rule-of-thumb: > 30 suggests problems)
-    # cond_number = np.linalg.cond(Xz.values)
-    # print(f"\nCondition number (X): {cond_number:.2f}")
-    
-    # # Correlation matrix (helps identify groups)
-    # print("\nPredictor correlation matrix:")
-    # print(Xz.corr())
-    
-    # # correlation matrix
-    # corr = Xz.corr()
-    
-    # plt.figure(figsize=(6,5))
-    # sns.heatmap(
-    #     corr,
-    #     annot=True,         # show correlation values in cells
-    #     fmt=".2f",
-    #     cmap="RdBu_r",      # red–blue reversed colormap
-    #     vmin=-1, vmax=1,    # full correlation range
-    #     square=True,
-    #     cbar_kws={"shrink": 0.8}
-    # )
-        
     omega_r, omega_p = pearsonr(variable_df.logprec,variable_df.omega)
     tcwv_r, tcwv_p = pearsonr(variable_df.logprec,variable_df.tcwv)
     dew_r, dew_p = pearsonr(variable_df.logprec,variable_df.dew)
