@@ -1,0 +1,1504 @@
+#!/usr/bin/env python3
+
+# pearson's correlation of variables with log(prec)
+
+# DJF
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+from scipy.stats import ks_2samp
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+import geopandas as gpd
+import pandas as pd
+import matplotlib.colors as mcolors
+from shapely.geometry import Point
+import glob
+
+season_idx = [1,2,12]
+
+# Define grid metadata
+lat_vals = np.linspace(30, 50, 81)
+lon_vals = np.linspace(-125, -102, 93)
+
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly_djf/*.csv") 
+
+# omega500
+ds = xr.open_dataset("omega500_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season1 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season1 = np.squeeze(season1.w.values) # change var name here
+
+# tcwv
+ds = xr.open_dataset("tcwv_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season2 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season2 = np.squeeze(season2.tcwv.values) # change var name here
+
+# 2-m dewpoint
+ds = xr.open_dataset("dew2m_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season3 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season3 = np.squeeze(season3.d2m.values) # change var name here
+
+# CAPE
+ds = xr.open_dataset("cape_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season4 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season4 = np.squeeze(season4.cape.values) # change var name here
+
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import seaborn as sns
+from scipy.stats import pearsonr  
+
+omega_rs = []
+tcwv_rs = []
+dew_rs = []
+cape_rs = []
+omega_ps = []
+tcwv_ps = []
+dew_ps = []
+cape_ps = []
+
+# this takes 1 minute
+for file_path in tqdm(csv_files):
+    df = pd.read_csv(file_path)
+    df = df.dropna(subset=["precip"])
+    df["year"] = pd.to_datetime(df["DATE"]).dt.year
+    
+    #df = df[df.year >= 2000] # toggle this on and off to switch between 1980 and 2000 start years
+    
+    # check for full years where max is 0 (full year missing)
+    grouped = df.groupby("year")["precip"].max().reset_index()
+    missing = grouped[grouped["precip"] == 0] 
+    
+    # insert seasonal subset code
+    df["month"] = pd.to_datetime(df["DATE"]).dt.month
+    df = df[df["month"].isin(season_idx)] # change months here
+
+    grouped = df.loc[df.groupby("year")["precip"].idxmax()].reset_index(drop=True)
+    grouped = grouped[~grouped["year"].isin(missing["year"])] # drop years where full-year data is missing
+    grouped["precip"] = (grouped["precip"] * 2.54) * 10 # convert inches to mm
+    grouped["date_only"] = pd.to_datetime(grouped["DATE"]).dt.date
+    
+    lat_idx = np.abs(lat_vals - df["LATITUDE"].iloc[0]).argmin()
+    lon_idx = np.abs(lon_vals - df["LONGITUDE"].iloc[0]).argmin()
+    
+    # Create full daily range
+    # this index is fine even for 2000-2024 stuff, since the 2000-2024 dates are still indexed properly
+    all_days = pd.date_range(start="1980-01-01", end="2024-12-31", freq="D")
+    
+    # Subset to JJA dates
+    season_days = all_days[all_days.month.isin(season_idx)] # change months here
+    
+    # Round max event timestamps to midnight
+    event_dates = pd.to_datetime(grouped["DATE"]).dt.floor("D")
+    
+    # Get the index positions of each event date in the full daily range for season
+    event_indices = [season_days.get_loc(date) for date in event_dates]
+    
+    # omega500
+    omega500_timeseries = season1[event_indices, lat_idx, lon_idx]
+    # tcwv
+    tcwv_timeseries = season2[event_indices, lat_idx, lon_idx]
+    # 2-m dewpoint
+    d2m_timeseries = season3[event_indices, lat_idx, lon_idx]
+    # CAPE
+    cape_timeseries = season4[event_indices, lat_idx, lon_idx]
+    
+    # predictand
+    prec_timeseries = np.array(grouped.precip)
+    
+    variable_df = pd.DataFrame({'prec':prec_timeseries,
+                                'omega':omega500_timeseries,
+                                'tcwv':tcwv_timeseries,
+                                'dew':d2m_timeseries,
+                                'cape':cape_timeseries})
+    
+    # natural log of CAPE + 1
+    variable_df["logcape"] = np.log1p(variable_df["cape"])
+    # natural log of precip
+    variable_df["logprec"] = np.log(variable_df['prec'] + 1) # offset in case any zeros snuck in
+    
+    # take inverse of omega700 so that positive values = ascending
+    variable_df["omega"] = variable_df['omega'] * -1
+    
+    # # standardize predictors so coefficients are comparable
+    # Xz = variable_df[['omega', 'tcwv', 'dew', 'logcape']]
+    # #Xz = (X - X.mean()) / X.std(ddof=0)   # standard z-scores per column
+    # Xz = sm.add_constant(Xz)              # add intercept
+    
+    # y = variable_df['logprec'].to_numpy()
+    
+    # #Xz = sm.add_constant(Xz)   
+    # # ---------- 2) Fit OLS ----------
+    # model = sm.OLS(y, Xz).fit()
+    # print(model.summary())
+    
+    # # Extract coefficients & p-values 
+    # coef_table = pd.DataFrame({
+    #     "coef": model.params,
+    #     "pval": model.pvalues
+    # })
+    
+    # # ---------- 3) Multicollinearity ----------
+    # # VIF (on predictors only; exclude constant)
+    # X_for_vif = Xz.drop(columns="const")
+    # vif = pd.Series(
+    #     [variance_inflation_factor(X_for_vif.values, i) for i in range(X_for_vif.shape[1])],
+    #     index=X_for_vif.columns, name="VIF"
+    # )
+    # print("\nVariance Inflation Factors (VIF):")
+    # print(vif)
+    
+    # # Condition number of the design matrix (rule-of-thumb: > 30 suggests problems)
+    # cond_number = np.linalg.cond(Xz.values)
+    # print(f"\nCondition number (X): {cond_number:.2f}")
+    
+    # # Correlation matrix (helps identify groups)
+    # print("\nPredictor correlation matrix:")
+    # print(Xz.corr())
+    
+    # # correlation matrix
+    # corr = Xz.corr()
+    
+    # plt.figure(figsize=(6,5))
+    # sns.heatmap(
+    #     corr,
+    #     annot=True,         # show correlation values in cells
+    #     fmt=".2f",
+    #     cmap="RdBu_r",      # red–blue reversed colormap
+    #     vmin=-1, vmax=1,    # full correlation range
+    #     square=True,
+    #     cbar_kws={"shrink": 0.8}
+    # )
+        
+    omega_r, omega_p = pearsonr(variable_df.logprec,variable_df.omega)
+    tcwv_r, tcwv_p = pearsonr(variable_df.logprec,variable_df.tcwv)
+    dew_r, dew_p = pearsonr(variable_df.logprec,variable_df.dew)
+    cape_r, cape_p = pearsonr(variable_df.logprec,variable_df.logcape)
+    
+    omega_rs.append(omega_r)
+    omega_ps.append(omega_p)
+    tcwv_rs.append(tcwv_r)
+    tcwv_ps.append(tcwv_p)
+    dew_rs.append(dew_r)
+    dew_ps.append(dew_p)
+    cape_rs.append(cape_r)
+    cape_ps.append(cape_p)
+
+# omega500
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_djf.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = omega_rs # change variable
+stations["pval"] = omega_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# tcwv
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_djf.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = tcwv_rs # change variable
+stations["pval"] = tcwv_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# dew2m
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_djf.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = dew_rs # change variable
+stations["pval"] = dew_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# cape
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_djf.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = cape_rs # change variable
+stations["pval"] = cape_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# MAM
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+from scipy.stats import ks_2samp
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+import geopandas as gpd
+import pandas as pd
+import matplotlib.colors as mcolors
+from shapely.geometry import Point
+import glob
+
+season_idx = [3,4,5]
+
+# Define grid metadata
+lat_vals = np.linspace(30, 50, 81)
+lon_vals = np.linspace(-125, -102, 93)
+
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly_mam/*.csv") 
+
+# omega500
+ds = xr.open_dataset("omega500_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season1 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season1 = np.squeeze(season1.w.values) # change var name here
+
+# tcwv
+ds = xr.open_dataset("tcwv_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season2 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season2 = np.squeeze(season2.tcwv.values) # change var name here
+
+# 2-m dewpoint
+ds = xr.open_dataset("dew2m_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season3 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season3 = np.squeeze(season3.d2m.values) # change var name here
+
+# CAPE
+ds = xr.open_dataset("cape_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season4 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season4 = np.squeeze(season4.cape.values) # change var name here
+
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import seaborn as sns
+from scipy.stats import pearsonr  
+
+omega_rs = []
+tcwv_rs = []
+dew_rs = []
+cape_rs = []
+omega_ps = []
+tcwv_ps = []
+dew_ps = []
+cape_ps = []
+
+# this takes 1 minute
+for file_path in tqdm(csv_files):
+    df = pd.read_csv(file_path)
+    df = df.dropna(subset=["precip"])
+    df["year"] = pd.to_datetime(df["DATE"]).dt.year
+    
+    #df = df[df.year >= 2000] # toggle this on and off to switch between 1980 and 2000 start years
+    
+    # check for full years where max is 0 (full year missing)
+    grouped = df.groupby("year")["precip"].max().reset_index()
+    missing = grouped[grouped["precip"] == 0] 
+    
+    # insert seasonal subset code
+    df["month"] = pd.to_datetime(df["DATE"]).dt.month
+    df = df[df["month"].isin(season_idx)] # change months here
+
+    grouped = df.loc[df.groupby("year")["precip"].idxmax()].reset_index(drop=True)
+    grouped = grouped[~grouped["year"].isin(missing["year"])] # drop years where full-year data is missing
+    grouped["precip"] = (grouped["precip"] * 2.54) * 10 # convert inches to mm
+    grouped["date_only"] = pd.to_datetime(grouped["DATE"]).dt.date
+    
+    lat_idx = np.abs(lat_vals - df["LATITUDE"].iloc[0]).argmin()
+    lon_idx = np.abs(lon_vals - df["LONGITUDE"].iloc[0]).argmin()
+    
+    # Create full daily range
+    # this index is fine even for 2000-2024 stuff, since the 2000-2024 dates are still indexed properly
+    all_days = pd.date_range(start="1980-01-01", end="2024-12-31", freq="D")
+    
+    # Subset to JJA dates
+    season_days = all_days[all_days.month.isin(season_idx)] # change months here
+    
+    # Round max event timestamps to midnight
+    event_dates = pd.to_datetime(grouped["DATE"]).dt.floor("D")
+    
+    # Get the index positions of each event date in the full daily range for season
+    event_indices = [season_days.get_loc(date) for date in event_dates]
+    
+    # omega500
+    omega500_timeseries = season1[event_indices, lat_idx, lon_idx]
+    # tcwv
+    tcwv_timeseries = season2[event_indices, lat_idx, lon_idx]
+    # 2-m dewpoint
+    d2m_timeseries = season3[event_indices, lat_idx, lon_idx]
+    # CAPE
+    cape_timeseries = season4[event_indices, lat_idx, lon_idx]
+    
+    # predictand
+    prec_timeseries = np.array(grouped.precip)
+    
+    variable_df = pd.DataFrame({'prec':prec_timeseries,
+                                'omega':omega500_timeseries,
+                                'tcwv':tcwv_timeseries,
+                                'dew':d2m_timeseries,
+                                'cape':cape_timeseries})
+    
+    # natural log of CAPE + 1
+    variable_df["logcape"] = np.log1p(variable_df["cape"])
+    # natural log of precip
+    variable_df["logprec"] = np.log(variable_df['prec'] + 1) # offset in case any zeros snuck in
+    
+    # take inverse of omega700 so that positive values = ascending
+    variable_df["omega"] = variable_df['omega'] * -1
+    
+    # # standardize predictors so coefficients are comparable
+    # Xz = variable_df[['omega', 'tcwv', 'dew', 'logcape']]
+    # #Xz = (X - X.mean()) / X.std(ddof=0)   # standard z-scores per column
+    # Xz = sm.add_constant(Xz)              # add intercept
+    
+    # y = variable_df['logprec'].to_numpy()
+    
+    # #Xz = sm.add_constant(Xz)   
+    # # ---------- 2) Fit OLS ----------
+    # model = sm.OLS(y, Xz).fit()
+    # print(model.summary())
+    
+    # # Extract coefficients & p-values 
+    # coef_table = pd.DataFrame({
+    #     "coef": model.params,
+    #     "pval": model.pvalues
+    # })
+    
+    # # ---------- 3) Multicollinearity ----------
+    # # VIF (on predictors only; exclude constant)
+    # X_for_vif = Xz.drop(columns="const")
+    # vif = pd.Series(
+    #     [variance_inflation_factor(X_for_vif.values, i) for i in range(X_for_vif.shape[1])],
+    #     index=X_for_vif.columns, name="VIF"
+    # )
+    # print("\nVariance Inflation Factors (VIF):")
+    # print(vif)
+    
+    # # Condition number of the design matrix (rule-of-thumb: > 30 suggests problems)
+    # cond_number = np.linalg.cond(Xz.values)
+    # print(f"\nCondition number (X): {cond_number:.2f}")
+    
+    # # Correlation matrix (helps identify groups)
+    # print("\nPredictor correlation matrix:")
+    # print(Xz.corr())
+    
+    # # correlation matrix
+    # corr = Xz.corr()
+    
+    # plt.figure(figsize=(6,5))
+    # sns.heatmap(
+    #     corr,
+    #     annot=True,         # show correlation values in cells
+    #     fmt=".2f",
+    #     cmap="RdBu_r",      # red–blue reversed colormap
+    #     vmin=-1, vmax=1,    # full correlation range
+    #     square=True,
+    #     cbar_kws={"shrink": 0.8}
+    # )
+        
+    omega_r, omega_p = pearsonr(variable_df.logprec,variable_df.omega)
+    tcwv_r, tcwv_p = pearsonr(variable_df.logprec,variable_df.tcwv)
+    dew_r, dew_p = pearsonr(variable_df.logprec,variable_df.dew)
+    cape_r, cape_p = pearsonr(variable_df.logprec,variable_df.logcape)
+    
+    omega_rs.append(omega_r)
+    omega_ps.append(omega_p)
+    tcwv_rs.append(tcwv_r)
+    tcwv_ps.append(tcwv_p)
+    dew_rs.append(dew_r)
+    dew_ps.append(dew_p)
+    cape_rs.append(cape_r)
+    cape_ps.append(cape_p)
+
+# omega500
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_mam.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = omega_rs # change variable
+stations["pval"] = omega_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# tcwv
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_mam.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = tcwv_rs # change variable
+stations["pval"] = tcwv_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# dew2m
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_mam.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = dew_rs # change variable
+stations["pval"] = dew_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# cape
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_mam.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = cape_rs # change variable
+stations["pval"] = cape_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# JJA
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+from scipy.stats import ks_2samp
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+import geopandas as gpd
+import pandas as pd
+import matplotlib.colors as mcolors
+from shapely.geometry import Point
+import glob
+
+season_idx = [6,7,8]
+
+# Define grid metadata
+lat_vals = np.linspace(30, 50, 81)
+lon_vals = np.linspace(-125, -102, 93)
+
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly_jja/*.csv") 
+
+# omega500
+ds = xr.open_dataset("omega500_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season1 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season1 = np.squeeze(season1.w.values) # change var name here
+
+# tcwv
+ds = xr.open_dataset("tcwv_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season2 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season2 = np.squeeze(season2.tcwv.values) # change var name here
+
+# 2-m dewpoint
+ds = xr.open_dataset("dew2m_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season3 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season3 = np.squeeze(season3.d2m.values) # change var name here
+
+# CAPE
+ds = xr.open_dataset("cape_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season4 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season4 = np.squeeze(season4.cape.values) # change var name here
+
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import seaborn as sns
+from scipy.stats import pearsonr  
+
+omega_rs = []
+tcwv_rs = []
+dew_rs = []
+cape_rs = []
+omega_ps = []
+tcwv_ps = []
+dew_ps = []
+cape_ps = []
+
+# this takes 1 minute
+for file_path in tqdm(csv_files):
+    df = pd.read_csv(file_path)
+    df = df.dropna(subset=["precip"])
+    df["year"] = pd.to_datetime(df["DATE"]).dt.year
+    
+    #df = df[df.year >= 2000] # toggle this on and off to switch between 1980 and 2000 start years
+    
+    # check for full years where max is 0 (full year missing)
+    grouped = df.groupby("year")["precip"].max().reset_index()
+    missing = grouped[grouped["precip"] == 0] 
+    
+    # insert seasonal subset code
+    df["month"] = pd.to_datetime(df["DATE"]).dt.month
+    df = df[df["month"].isin(season_idx)] # change months here
+
+    grouped = df.loc[df.groupby("year")["precip"].idxmax()].reset_index(drop=True)
+    grouped = grouped[~grouped["year"].isin(missing["year"])] # drop years where full-year data is missing
+    grouped["precip"] = (grouped["precip"] * 2.54) * 10 # convert inches to mm
+    grouped["date_only"] = pd.to_datetime(grouped["DATE"]).dt.date
+    
+    lat_idx = np.abs(lat_vals - df["LATITUDE"].iloc[0]).argmin()
+    lon_idx = np.abs(lon_vals - df["LONGITUDE"].iloc[0]).argmin()
+    
+    # Create full daily range
+    # this index is fine even for 2000-2024 stuff, since the 2000-2024 dates are still indexed properly
+    all_days = pd.date_range(start="1980-01-01", end="2024-12-31", freq="D")
+    
+    # Subset to JJA dates
+    season_days = all_days[all_days.month.isin(season_idx)] # change months here
+    
+    # Round max event timestamps to midnight
+    event_dates = pd.to_datetime(grouped["DATE"]).dt.floor("D")
+    
+    # Get the index positions of each event date in the full daily range for season
+    event_indices = [season_days.get_loc(date) for date in event_dates]
+    
+    # omega500
+    omega500_timeseries = season1[event_indices, lat_idx, lon_idx]
+    # tcwv
+    tcwv_timeseries = season2[event_indices, lat_idx, lon_idx]
+    # 2-m dewpoint
+    d2m_timeseries = season3[event_indices, lat_idx, lon_idx]
+    # CAPE
+    cape_timeseries = season4[event_indices, lat_idx, lon_idx]
+    
+    # predictand
+    prec_timeseries = np.array(grouped.precip)
+    
+    variable_df = pd.DataFrame({'prec':prec_timeseries,
+                                'omega':omega500_timeseries,
+                                'tcwv':tcwv_timeseries,
+                                'dew':d2m_timeseries,
+                                'cape':cape_timeseries})
+    
+    # natural log of CAPE + 1
+    variable_df["logcape"] = np.log1p(variable_df["cape"])
+    # natural log of precip
+    variable_df["logprec"] = np.log(variable_df['prec'] + 1) # offset in case any zeros snuck in
+    
+    # take inverse of omega700 so that positive values = ascending
+    variable_df["omega"] = variable_df['omega'] * -1
+    
+    # # standardize predictors so coefficients are comparable
+    # Xz = variable_df[['omega', 'tcwv', 'dew', 'logcape']]
+    # #Xz = (X - X.mean()) / X.std(ddof=0)   # standard z-scores per column
+    # Xz = sm.add_constant(Xz)              # add intercept
+    
+    # y = variable_df['logprec'].to_numpy()
+    
+    # #Xz = sm.add_constant(Xz)   
+    # # ---------- 2) Fit OLS ----------
+    # model = sm.OLS(y, Xz).fit()
+    # print(model.summary())
+    
+    # # Extract coefficients & p-values 
+    # coef_table = pd.DataFrame({
+    #     "coef": model.params,
+    #     "pval": model.pvalues
+    # })
+    
+    # # ---------- 3) Multicollinearity ----------
+    # # VIF (on predictors only; exclude constant)
+    # X_for_vif = Xz.drop(columns="const")
+    # vif = pd.Series(
+    #     [variance_inflation_factor(X_for_vif.values, i) for i in range(X_for_vif.shape[1])],
+    #     index=X_for_vif.columns, name="VIF"
+    # )
+    # print("\nVariance Inflation Factors (VIF):")
+    # print(vif)
+    
+    # # Condition number of the design matrix (rule-of-thumb: > 30 suggests problems)
+    # cond_number = np.linalg.cond(Xz.values)
+    # print(f"\nCondition number (X): {cond_number:.2f}")
+    
+    # # Correlation matrix (helps identify groups)
+    # print("\nPredictor correlation matrix:")
+    # print(Xz.corr())
+    
+    # # correlation matrix
+    # corr = Xz.corr()
+    
+    # plt.figure(figsize=(6,5))
+    # sns.heatmap(
+    #     corr,
+    #     annot=True,         # show correlation values in cells
+    #     fmt=".2f",
+    #     cmap="RdBu_r",      # red–blue reversed colormap
+    #     vmin=-1, vmax=1,    # full correlation range
+    #     square=True,
+    #     cbar_kws={"shrink": 0.8}
+    # )
+        
+    omega_r, omega_p = pearsonr(variable_df.logprec,variable_df.omega)
+    tcwv_r, tcwv_p = pearsonr(variable_df.logprec,variable_df.tcwv)
+    dew_r, dew_p = pearsonr(variable_df.logprec,variable_df.dew)
+    cape_r, cape_p = pearsonr(variable_df.logprec,variable_df.logcape)
+    
+    omega_rs.append(omega_r)
+    omega_ps.append(omega_p)
+    tcwv_rs.append(tcwv_r)
+    tcwv_ps.append(tcwv_p)
+    dew_rs.append(dew_r)
+    dew_ps.append(dew_p)
+    cape_rs.append(cape_r)
+    cape_ps.append(cape_p)
+
+# omega500
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_jja.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = omega_rs # change variable
+stations["pval"] = omega_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# tcwv
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_jja.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = tcwv_rs # change variable
+stations["pval"] = tcwv_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# dew2m
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_jja.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = dew_rs # change variable
+stations["pval"] = dew_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# cape
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_jja.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = cape_rs # change variable
+stations["pval"] = cape_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# SON
+
+import xarray as xr
+import numpy as np
+from scipy.stats import linregress
+from scipy.stats import ks_2samp
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from tqdm import tqdm
+import geopandas as gpd
+import pandas as pd
+import matplotlib.colors as mcolors
+from shapely.geometry import Point
+import glob
+
+season_idx = [9,10,11]
+
+# Define grid metadata
+lat_vals = np.linspace(30, 50, 81)
+lon_vals = np.linspace(-125, -102, 93)
+
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly_son/*.csv") 
+
+# omega500
+ds = xr.open_dataset("omega500_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season1 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season1 = np.squeeze(season1.w.values) # change var name here
+
+# tcwv
+ds = xr.open_dataset("tcwv_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season2 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season2 = np.squeeze(season2.tcwv.values) # change var name here
+
+# 2-m dewpoint
+ds = xr.open_dataset("dew2m_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season3 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season3 = np.squeeze(season3.d2m.values) # change var name here
+
+# CAPE
+ds = xr.open_dataset("cape_all.nc")
+subset = ds.sel(latitude=slice(30, 50), longitude=slice(-125, -102)) # trim from -102 to -100
+# subset into the season here
+season4 = subset.sel(valid_time=subset['valid_time'].dt.month.isin(season_idx)) # change months here
+season4 = np.squeeze(season4.cape.values) # change var name here
+
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import seaborn as sns
+from scipy.stats import pearsonr  
+
+omega_rs = []
+tcwv_rs = []
+dew_rs = []
+cape_rs = []
+omega_ps = []
+tcwv_ps = []
+dew_ps = []
+cape_ps = []
+
+# this takes 1 minute
+for file_path in tqdm(csv_files):
+    df = pd.read_csv(file_path)
+    df = df.dropna(subset=["precip"])
+    df["year"] = pd.to_datetime(df["DATE"]).dt.year
+    
+    #df = df[df.year >= 2000] # toggle this on and off to switch between 1980 and 2000 start years
+    
+    # check for full years where max is 0 (full year missing)
+    grouped = df.groupby("year")["precip"].max().reset_index()
+    missing = grouped[grouped["precip"] == 0] 
+    
+    # insert seasonal subset code
+    df["month"] = pd.to_datetime(df["DATE"]).dt.month
+    df = df[df["month"].isin(season_idx)] # change months here
+
+    grouped = df.loc[df.groupby("year")["precip"].idxmax()].reset_index(drop=True)
+    grouped = grouped[~grouped["year"].isin(missing["year"])] # drop years where full-year data is missing
+    grouped["precip"] = (grouped["precip"] * 2.54) * 10 # convert inches to mm
+    grouped["date_only"] = pd.to_datetime(grouped["DATE"]).dt.date
+    
+    lat_idx = np.abs(lat_vals - df["LATITUDE"].iloc[0]).argmin()
+    lon_idx = np.abs(lon_vals - df["LONGITUDE"].iloc[0]).argmin()
+    
+    # Create full daily range
+    # this index is fine even for 2000-2024 stuff, since the 2000-2024 dates are still indexed properly
+    all_days = pd.date_range(start="1980-01-01", end="2024-12-31", freq="D")
+    
+    # Subset to JJA dates
+    season_days = all_days[all_days.month.isin(season_idx)] # change months here
+    
+    # Round max event timestamps to midnight
+    event_dates = pd.to_datetime(grouped["DATE"]).dt.floor("D")
+    
+    # Get the index positions of each event date in the full daily range for season
+    event_indices = [season_days.get_loc(date) for date in event_dates]
+    
+    # omega500
+    omega500_timeseries = season1[event_indices, lat_idx, lon_idx]
+    # tcwv
+    tcwv_timeseries = season2[event_indices, lat_idx, lon_idx]
+    # 2-m dewpoint
+    d2m_timeseries = season3[event_indices, lat_idx, lon_idx]
+    # CAPE
+    cape_timeseries = season4[event_indices, lat_idx, lon_idx]
+    
+    # predictand
+    prec_timeseries = np.array(grouped.precip)
+    
+    variable_df = pd.DataFrame({'prec':prec_timeseries,
+                                'omega':omega500_timeseries,
+                                'tcwv':tcwv_timeseries,
+                                'dew':d2m_timeseries,
+                                'cape':cape_timeseries})
+    
+    # natural log of CAPE + 1
+    variable_df["logcape"] = np.log1p(variable_df["cape"])
+    # natural log of precip
+    variable_df["logprec"] = np.log(variable_df['prec'] + 1) # offset in case any zeros snuck in
+    
+    # take inverse of omega700 so that positive values = ascending
+    variable_df["omega"] = variable_df['omega'] * -1
+    
+    # # standardize predictors so coefficients are comparable
+    # Xz = variable_df[['omega', 'tcwv', 'dew', 'logcape']]
+    # #Xz = (X - X.mean()) / X.std(ddof=0)   # standard z-scores per column
+    # Xz = sm.add_constant(Xz)              # add intercept
+    
+    # y = variable_df['logprec'].to_numpy()
+    
+    # #Xz = sm.add_constant(Xz)   
+    # # ---------- 2) Fit OLS ----------
+    # model = sm.OLS(y, Xz).fit()
+    # print(model.summary())
+    
+    # # Extract coefficients & p-values 
+    # coef_table = pd.DataFrame({
+    #     "coef": model.params,
+    #     "pval": model.pvalues
+    # })
+    
+    # # ---------- 3) Multicollinearity ----------
+    # # VIF (on predictors only; exclude constant)
+    # X_for_vif = Xz.drop(columns="const")
+    # vif = pd.Series(
+    #     [variance_inflation_factor(X_for_vif.values, i) for i in range(X_for_vif.shape[1])],
+    #     index=X_for_vif.columns, name="VIF"
+    # )
+    # print("\nVariance Inflation Factors (VIF):")
+    # print(vif)
+    
+    # # Condition number of the design matrix (rule-of-thumb: > 30 suggests problems)
+    # cond_number = np.linalg.cond(Xz.values)
+    # print(f"\nCondition number (X): {cond_number:.2f}")
+    
+    # # Correlation matrix (helps identify groups)
+    # print("\nPredictor correlation matrix:")
+    # print(Xz.corr())
+    
+    # # correlation matrix
+    # corr = Xz.corr()
+    
+    # plt.figure(figsize=(6,5))
+    # sns.heatmap(
+    #     corr,
+    #     annot=True,         # show correlation values in cells
+    #     fmt=".2f",
+    #     cmap="RdBu_r",      # red–blue reversed colormap
+    #     vmin=-1, vmax=1,    # full correlation range
+    #     square=True,
+    #     cbar_kws={"shrink": 0.8}
+    # )
+        
+    omega_r, omega_p = pearsonr(variable_df.logprec,variable_df.omega)
+    tcwv_r, tcwv_p = pearsonr(variable_df.logprec,variable_df.tcwv)
+    dew_r, dew_p = pearsonr(variable_df.logprec,variable_df.dew)
+    cape_r, cape_p = pearsonr(variable_df.logprec,variable_df.logcape)
+    
+    omega_rs.append(omega_r)
+    omega_ps.append(omega_p)
+    tcwv_rs.append(tcwv_r)
+    tcwv_ps.append(tcwv_p)
+    dew_rs.append(dew_r)
+    dew_ps.append(dew_p)
+    cape_rs.append(cape_r)
+    cape_ps.append(cape_p)
+
+# omega500
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_son.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = omega_rs # change variable
+stations["pval"] = omega_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# tcwv
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_son.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = tcwv_rs # change variable
+stations["pval"] = tcwv_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# dew2m
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_son.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = dew_rs # change variable
+stations["pval"] = dew_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
+# cape
+
+# Load season station shapefile
+stations = gpd.read_file("all_stations_son.shp") # change season here
+
+# Add to DataFrame
+stations["rval"] = cape_rs # change variable
+stations["pval"] = cape_ps # change variable
+stations["size"] = np.where(stations["pval"] < 0.1, 250, 100)
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington", "Oregon", "Idaho", "Montana", "California", "Nevada",
+    "Utah", "Wyoming", "Colorado", "Arizona", "New Mexico"
+])]
+
+# Define bins and colormap
+bounds = np.arange(-1, 1.01, 0.1)
+cmap = plt.cm.coolwarm
+norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+stations.plot(ax=ax, column="rval", cmap=cmap, norm=norm,
+              markersize=stations["size"], edgecolor="black")
+
+# for marker_style, group in stations.groupby("marker"):
+#     group.plot(ax=ax, column="trend", cmap=cmap, norm=norm,
+#                 markersize=group["size"], edgecolor="black", marker=marker_style)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=35, shrink=0.6,
+                    ticks=np.arange(-1, 1.01, 0.4))
+# cbar.ax.set_xticklabels(['','-0.05','','-0.03','','-0.01','', 
+#                          '0.01','','0.03','','0.05',''])
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Changes in JJA mean 500 hPa omega (1980–2024)", fontsize=14, y=0.97)
+ax.set_axis_off()
+plt.show()
+
