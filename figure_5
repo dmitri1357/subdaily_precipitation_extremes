@@ -20,10 +20,13 @@ for file_path in tqdm(csv_files):
 
     # Find the year with the highest precipitation value
     max_rows = df[df["precip"] == df["precip"].max()] # subset all possible tied values
-    #max_row = max_rows.iloc[-1,:] # changed to extract the last occurrence in case of ties
+    max_row = max_rows.iloc[-1,:] # changed to extract the last occurrence in case of ties
     
-    # collect all ties
-    years_list.extend(list(max_rows.year)) 
+    # # collect all ties
+    # years_list.extend(list(max_row.year)) 
+    
+    # now collecting just the last year of occurrence
+    years_list.append(max_row.year)
 
     # Print results
     #print(f"Station: {max_row['NAME']}, Date: {max_row['DATE']}, Max Precip: {max_row['precip']:.2f}")
