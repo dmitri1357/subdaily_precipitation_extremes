@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+
+'''
+Note: This code is for panel A only. Panels B-E were created the same way but subset to the seasons. 
+'''
+
+# what % of the annual maximum 1-hr amounts were associated with lightning?
+# e.g., was there CG lightning on that day
+
+import glob
+import pandas as pd
+import geopandas as gpd
+import numpy as np
+import xarray as xr
+from shapely.geometry import Point
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from tqdm import tqdm
+
+# Load lightning dataset
+lightning = xr.open_dataset("cg_lightning_1995_2024.nc") # processed lightning dataset from the NLDN (obtained from NOAA Severe Weather Data Inventory)
+lightning_dates = pd.to_datetime(lightning.time.values)
+lightning_array = lightning["lightning_count"].values
+
+# List all the CSV files
+csv_files = glob.glob("/Volumes/easystore/hourly_precip/cleaned_hourly_utc/*.csv") # using UTC precip files to match NLDN
+
+results = []
+
+for file_path in tqdm(csv_files):
+    df = pd.read_csv(file_path)
+    df["DATE"] = pd.to_datetime(df["DATE"])
+    df = df[(df["DATE"].dt.year >= 1995) & (df["DATE"].dt.year <= 2024)]  # Subset to 1995–2024
+
+    df["year"] = df["DATE"].dt.year
+    
+    grouped = df.groupby("year")["precip"].max().reset_index()
+    grouped = grouped[grouped["precip"] > 0] # only keep years where max precip >0, essentially treat zero-max years as NA
+    #grouped = grouped[grouped["precip"] >= 0.2] # only consider years with max of at least 0.2"
+    
+    #if len(grouped) >= 10: # only consider stations with at least 10 years that had max of >= 0.20"
+    
+    max_precip_dates = df.groupby("year")["precip"].idxmax()
+    max_precip_dates = max_precip_dates.loc[grouped.year] # this step is necessary to subset the annual values to only the >0.2" events identified earlier
+    max_dates = df.loc[max_precip_dates, "DATE"].dt.floor("D").values
+
+    df_station = df.iloc[0]
+    lat = df_station["LATITUDE"]
+    lon = df_station["LONGITUDE"]
+
+    lat_idx = np.abs(lightning.lat - lat).argmin().item()
+    lon_idx = np.abs(lightning.lon - lon).argmin().item()
+    
+    # Extract the 1D lightning time series for the station's grid cell
+    lightning_counts = lightning_array[:, lat_idx, lon_idx]
+    
+    # Create a DataFrame for indexing without converting to series
+    df_lightning = pd.DataFrame({
+        "time": lightning_dates,
+        "count": lightning_counts
+    })
+    
+    # Filter for >0 lightning counts and floor to day level
+    lightning_days = df_lightning[df_lightning["count"] > 0]["time"].dt.floor("D").unique()
+
+    count_with_lightning = sum(pd.Timestamp(d).floor("D") in lightning_days for d in max_dates)
+    pct_lightning = (count_with_lightning / len(max_dates)) * 100
+
+    results.append({
+        "NAME": df_station["NAME"],
+        "LATITUDE": lat,
+        "LONGITUDE": lon,
+        "pct_lightning": pct_lightning
+    })
+
+# Convert to GeoDataFrame
+results_df = pd.DataFrame(results)
+geometry = [Point(xy) for xy in zip(results_df["LONGITUDE"], results_df["LATITUDE"])]
+gdf = gpd.GeoDataFrame(results_df, geometry=geometry, crs="EPSG:4326")
+
+# Load states
+states = gpd.read_file("cb_2018_us_state_5m.shp")
+states = states.to_crs("EPSG:4326")
+states = states[states.NAME.isin([
+    "Washington","Oregon","Idaho","Montana","California","Nevada",
+    "Utah","Wyoming","Colorado","Arizona","New Mexico"])]
+
+# Define bins and colormap
+bins = list(range(0, 110, 10))
+cmap = plt.cm.Reds
+norm = mcolors.BoundaryNorm(bins, ncolors=cmap.N, clip=True)
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 8))
+states.boundary.plot(ax=ax, edgecolor="k")
+gdf.plot(ax=ax, column="pct_lightning", cmap=cmap, norm=norm,
+         markersize=100, edgecolor="black")
+
+# Add customized colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.025, pad=0.002, aspect=45, shrink=0.6)
+cbar.ax.tick_params(labelsize=15)
+
+#plt.title("Percent of annual max 1-hr precip events with lightning (1995–2024)    ", fontsize=14, y=0.97)
+ax.set_axis_off()
